@@ -1,0 +1,720 @@
+import mongoose from "mongoose";
+import { ConsignmentVehicle, IConsignmentVehicle } from "../models/consignment-vehicle.model";
+import { Vehicle } from "../models/vehicle.model";
+import { getNextId } from "./counter.service";
+
+interface ConsignmentQuery {
+    saleType?: string;
+    vehicleType?: string;
+    status?: string;
+    settlementStatus?: string;
+    buyerPaymentStatus?: string;
+    payeePaymentStatus?: string;
+    search?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    limit?: number;
+}
+
+// ── Maps cost breakdown category → field name ─────────────────────
+const CATEGORY_TO_FIELD: Record<string, string> = {
+    travel: "travelCost",
+    workshop: "workshopRepairCost",
+    spareParts: "sparePartsAccessories",
+    alignment: "alignmentWork",
+    painting: "paintingPolishingCost",
+    washing: "washingDetailingCost",
+    fuel: "fuelCost",
+    paperwork: "paperworkTaxInsurance",
+    commission: "commission",
+    other: "otherExpenses",
+};
+
+const syncCostFieldsFromBreakdowns = (vehicle: IConsignmentVehicle) => {
+    for (const breakdown of vehicle.costBreakdowns) {
+        const field = CATEGORY_TO_FIELD[breakdown.category];
+        if (field && breakdown.items.length > 0) {
+            const total = breakdown.items.reduce((sum, item) => sum + (item.amount || 0), 0);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (vehicle as any)[field] = total;
+        }
+    }
+};
+
+// ── CRUD ──────────────────────────────────────────────────────────
+
+export const createConsignment = async (data: Partial<IConsignmentVehicle>): Promise<IConsignmentVehicle> => {
+    // Prevent duplicate — check if this reg. number already exists in Phase 2 (purchased vehicles)
+    if (data.registrationNo) {
+        const existsInVehicles = await Vehicle.findOne({
+            registrationNo: data.registrationNo,
+            isActive: true,
+        }).lean();
+        if (existsInVehicles) {
+            throw new Error(
+                `Vehicle with registration ${data.registrationNo} already exists in Purchased Vehicles (${(existsInVehicles as any).vehicleId}). ` +
+                `Cannot add to consignment inventory.`
+            );
+        }
+        // Also check within consignment collection itself
+        const existsInConsignments = await ConsignmentVehicle.findOne({
+            registrationNo: data.registrationNo,
+            isActive: true,
+        }).lean();
+        if (existsInConsignments) {
+            throw new Error(
+                `Vehicle with registration ${data.registrationNo} already exists in Consignment Inventory (${(existsInConsignments as any).consignmentId}).`
+            );
+        }
+    }
+
+    const consignmentId = await getNextId("consignment");
+    const vehicle = new ConsignmentVehicle({ ...data, consignmentId });
+    await vehicle.save();
+    vehicle.activityLog.push({
+        action: "created",
+        description: `${data.saleType === "park_sale" ? "Park Sale" : "Finance Sale"} registered: ${data.make} ${data.model} (${data.registrationNo})${data.previousOwner ? ` from ${data.previousOwner}` : ""}`,
+        date: new Date(),
+    });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const getConsignments = async (query: ConsignmentQuery): Promise<unknown> => {
+    const { saleType, vehicleType, status, settlementStatus, buyerPaymentStatus, payeePaymentStatus, search, dateFrom, dateTo, page = 1, limit = 20 } = query;
+    const filter: Record<string, unknown> = { isActive: true };
+
+    if (saleType) filter.saleType = saleType;
+    if (vehicleType) filter.vehicleType = vehicleType;
+    if (status) filter.status = status;
+    if (settlementStatus) filter.settlementStatus = settlementStatus;
+    if (buyerPaymentStatus) filter.buyerPaymentStatus = buyerPaymentStatus;
+    if (payeePaymentStatus) filter.payeePaymentStatus = payeePaymentStatus;
+    if (dateFrom || dateTo) {
+        const df: Record<string, Date> = {};
+        if (dateFrom) df.$gte = new Date(dateFrom);
+        if (dateTo) df.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+        filter.dateReceived = df;
+    }
+    if (search) {
+        const trimmed = search.trim();
+        if (trimmed) {
+            const re = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+            filter.$or = [
+                { make: re }, { model: re }, { registrationNo: re },
+                { consignmentId: re }, { previousOwner: re }, { soldTo: re },
+            ];
+        }
+    }
+
+    const skip = (page - 1) * limit;
+    const [data, total] = await Promise.all([
+        ConsignmentVehicle.find(filter).sort({ dateReceived: -1 }).skip(skip).limit(limit).lean(),
+        ConsignmentVehicle.countDocuments(filter),
+    ]);
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+};
+
+export const getConsignmentById = async (id: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    return ConsignmentVehicle.findOne({ _id: id, isActive: true });
+};
+
+export const updateConsignment = async (id: string, data: Partial<IConsignmentVehicle>): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+    Object.assign(vehicle, data);
+    vehicle.activityLog.push({ action: "updated", description: "Consignment details updated", date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const deleteConsignment = async (id: string): Promise<boolean> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return false;
+    const result = await ConsignmentVehicle.findOneAndUpdate({ _id: id, isActive: true }, { $set: { isActive: false } });
+    return !!result;
+};
+
+export const updateConsignmentStatus = async (id: string, status: IConsignmentVehicle["status"], notes?: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+    vehicle.status = status;
+    vehicle.activityLog.push({ action: "status_changed", description: `Status changed to ${status}${notes ? `: ${notes}` : ""}`, date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const returnConsignment = async (id: string, notes?: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+    vehicle.status = "returned";
+    vehicle.activityLog.push({ action: "returned", description: `Vehicle returned${vehicle.previousOwner ? ` to ${vehicle.previousOwner}` : ""}${notes ? `: ${notes}` : ""}`, date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const getConsignmentStats = async (query: { saleType?: string; vehicleType?: string; status?: string; search?: string; dateFrom?: string; dateTo?: string } = {}) => {
+    const { saleType, vehicleType, status, search, dateFrom, dateTo } = query;
+    const match: Record<string, unknown> = { isActive: true };
+    if (saleType) match.saleType = saleType;
+    if (vehicleType) match.vehicleType = vehicleType;
+    if (status) match.status = status;
+    if (dateFrom || dateTo) {
+        const df: Record<string, Date> = {};
+        if (dateFrom) df.$gte = new Date(dateFrom);
+        if (dateTo) df.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+        match.dateReceived = df;
+    }
+    if (search) {
+        const trimmed = search.trim();
+        if (trimmed) {
+            const re = new RegExp(trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+            match.$or = [
+                { make: re }, { model: re }, { registrationNo: re },
+                { consignmentId: re }, { previousOwner: re }, { soldTo: re },
+            ];
+        }
+    }
+
+    const stats = await ConsignmentVehicle.aggregate([
+        { $match: match },
+        {
+            $group: {
+                _id: "$saleType",
+                total: { $sum: 1 },
+                inShop: { $sum: { $cond: [{ $in: ["$status", ["received", "reconditioning", "ready_for_sale"]] }, 1, 0] } },
+                sold: { $sum: { $cond: [{ $in: ["$status", ["sold", "sold_pending"]] }, 1, 0] } },
+                returned: { $sum: { $cond: [{ $eq: ["$status", "returned"] }, 1, 0] } },
+                totalInvested: { $sum: "$totalInvestment" },
+                totalReconCost: { $sum: { $ifNull: ["$totalReconCost", 0] } },
+                totalRevenue: { $sum: { $ifNull: ["$soldPrice", 0] } },
+                totalNetProfit: { $sum: { $cond: [{ $in: ["$status", ["sold", "sold_pending"]] }, "$netProfit", 0] } },
+                // Buyer payment tracking
+                totalReceivedFromBuyers: { $sum: { $ifNull: ["$receivedAmount", 0] } },
+                totalBuyerBalance: { $sum: { $ifNull: ["$buyerBalance", 0] } },
+                pendingBuyerCount: { $sum: { $cond: [{ $gt: ["$buyerBalance", 0] }, 1, 0] } },
+                // Payee payment tracking (Owner for park_sale, Finance for finance_sale)
+                totalPaidToPayee: { $sum: { $ifNull: ["$paidToPayee", 0] } },
+                // Only sum payee balance from sold vehicles (unsold vehicles don't have an outstanding owner liability yet)
+                totalPayeeBalance: { $sum: { $cond: [{ $in: ["$status", ["sold", "sold_pending"]] }, { $ifNull: ["$payeeBalance", 0] }, 0] } },
+                // Only count sold vehicles with unpaid payee balance as "pending"
+                pendingPayeeCount: { $sum: { $cond: [{ $and: [{ $in: ["$status", ["sold", "sold_pending"]] }, { $in: ["$payeePaymentStatus", ["not_started", "partial"]] }] }, 1, 0] } },
+                // Settlement
+                fullyClosed: { $sum: { $cond: [{ $eq: ["$settlementStatus", "fully_closed"] }, 1, 0] } },
+            },
+        },
+    ]);
+
+    const p = stats.find(s => s._id === "park_sale") ?? {};
+    const f = stats.find(s => s._id === "finance_sale") ?? {};
+    const z = (v: unknown) => (v as number) || 0;
+
+    const combined = {
+        totalVehicles: z(p.total) + z(f.total),
+        currentlyInShop: z(p.inShop) + z(f.inShop),
+        sold: z(p.sold) + z(f.sold),
+        returned: z(p.returned) + z(f.returned),
+        totalInvested: z(p.totalInvested) + z(f.totalInvested),
+        totalReconCost: z(p.totalReconCost) + z(f.totalReconCost),
+        totalRevenue: z(p.totalRevenue) + z(f.totalRevenue),
+        totalNetProfit: z(p.totalNetProfit) + z(f.totalNetProfit),
+        avgMargin: 0,
+        // Buyer aggregate
+        totalReceivedFromBuyers: z(p.totalReceivedFromBuyers) + z(f.totalReceivedFromBuyers),
+        totalBuyerBalance: z(p.totalBuyerBalance) + z(f.totalBuyerBalance),
+        pendingBuyerPayments: {
+            count: z(p.pendingBuyerCount) + z(f.pendingBuyerCount),
+            amount: z(p.totalBuyerBalance) + z(f.totalBuyerBalance),
+        },
+        // Payee aggregate
+        totalPaidToPayee: z(p.totalPaidToPayee) + z(f.totalPaidToPayee),
+        totalPayeeBalance: z(p.totalPayeeBalance) + z(f.totalPayeeBalance),
+        pendingPayeePayments: {
+            count: z(p.pendingPayeeCount) + z(f.pendingPayeeCount),
+            amount: z(p.totalPayeeBalance) + z(f.totalPayeeBalance),
+        },
+        // Park Sale breakdown
+        parkSale: {
+            total: z(p.total), inShop: z(p.inShop), sold: z(p.sold), returned: z(p.returned),
+            totalReconCost: z(p.totalReconCost),
+            totalRevenue: z(p.totalRevenue),
+            totalNetProfit: z(p.totalNetProfit),
+            totalPaidToOwner: z(p.totalPaidToPayee),
+            totalOwnerBalance: z(p.totalPayeeBalance),
+            totalReceivedFromBuyers: z(p.totalReceivedFromBuyers),
+            totalBuyerBalance: z(p.totalBuyerBalance),
+            fullyClosed: z(p.fullyClosed),
+        },
+        // Finance Sale breakdown
+        financeSale: {
+            total: z(f.total), inShop: z(f.inShop), sold: z(f.sold), returned: z(f.returned),
+            totalReconCost: z(f.totalReconCost),
+            totalRevenue: z(f.totalRevenue),
+            totalNetProfit: z(f.totalNetProfit),
+            totalPaidToFinance: z(f.totalPaidToPayee),
+            totalFinanceBalance: z(f.totalPayeeBalance),
+            totalReceivedFromBuyers: z(f.totalReceivedFromBuyers),
+            totalBuyerBalance: z(f.totalBuyerBalance),
+            fullyClosed: z(f.fullyClosed),
+        },
+    };
+    combined.avgMargin = combined.totalReconCost > 0
+        ? parseFloat(((combined.totalNetProfit / combined.totalReconCost) * 100).toFixed(2))
+        : 0;
+
+    return combined;
+};
+
+// ── Costs ─────────────────────────────────────────────────────────
+
+export const updateCosts = async (id: string, costs: Record<string, number>): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+    Object.assign(vehicle, costs);
+    syncCostFieldsFromBreakdowns(vehicle);
+    vehicle.activityLog.push({ action: "costs_updated", description: "Reconditioning costs updated", date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const addCostBreakdownItem = async (id: string, category: string, item: { name: string; amount: number; date?: string; notes?: string }): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+
+    let breakdown = vehicle.costBreakdowns.find(b => b.category === category);
+    if (!breakdown) {
+        vehicle.costBreakdowns.push({ category: category as IConsignmentVehicle["costBreakdowns"][0]["category"], items: [] });
+        breakdown = vehicle.costBreakdowns[vehicle.costBreakdowns.length - 1];
+    }
+    breakdown.items.push({
+        _id: new mongoose.Types.ObjectId(),
+        name: item.name,
+        amount: item.amount,
+        date: item.date ? new Date(item.date) : undefined,
+        notes: item.notes,
+    });
+    syncCostFieldsFromBreakdowns(vehicle);
+    vehicle.activityLog.push({ action: "cost_item_added", description: `Added ${category} cost: ${item.name} ₹${item.amount}`, amount: item.amount, date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const deleteCostBreakdownItem = async (id: string, itemId: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+
+    let deletedItemName: string | undefined;
+    let deletedItemAmount: number | undefined;
+    let deletedCategory: string | undefined;
+
+    for (const breakdown of vehicle.costBreakdowns) {
+        const before = breakdown.items.length;
+        const found = breakdown.items.find(item => item._id.toString() === itemId);
+        breakdown.items = breakdown.items.filter(item => item._id.toString() !== itemId);
+        if (before !== breakdown.items.length) {
+            deletedItemName = found?.name;
+            deletedItemAmount = found?.amount;
+            deletedCategory = breakdown.category;
+            const field = CATEGORY_TO_FIELD[breakdown.category];
+            if (field) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (vehicle as any)[field] = breakdown.items.reduce((s, i) => s + (i.amount || 0), 0);
+            }
+        }
+    }
+    vehicle.activityLog.push({
+        action: "cost_item_deleted",
+        description: deletedCategory && deletedItemName
+            ? `${deletedCategory.charAt(0).toUpperCase() + deletedCategory.slice(1)} cost item removed: ${deletedItemName}${deletedItemAmount ? ` ₹${deletedItemAmount.toLocaleString("en-IN")}` : ""}`
+            : "Cost breakdown item removed",
+        amount: deletedItemAmount,
+        date: new Date(),
+    });
+    await vehicle.save();
+    return vehicle;
+};
+
+// ── Sale ──────────────────────────────────────────────────────────
+
+export const recordSale = async (id: string, data: { dateSold: string; soldPrice: number; soldTo?: string; soldToPhone?: string; remarks?: string }): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+
+    vehicle.dateSold = new Date(data.dateSold);
+    vehicle.soldPrice = data.soldPrice;
+    if (data.soldTo) vehicle.soldTo = data.soldTo;
+    if (data.soldToPhone) vehicle.soldToPhone = data.soldToPhone;
+    if (data.remarks) vehicle.remarks = data.remarks;
+
+    vehicle.activityLog.push({ action: "sold", description: `Sold to ${data.soldTo || "a buyer"} for ₹${data.soldPrice.toLocaleString("en-IN")}`, amount: data.soldPrice, date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const undoSale = async (id: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+
+    vehicle.dateSold = undefined;
+    vehicle.soldPrice = undefined;
+    vehicle.soldTo = undefined;
+    vehicle.soldToPhone = undefined;
+    vehicle.status = "ready_for_sale";
+    vehicle.buyerPayments = [];
+    vehicle.payeePayments = [];
+    vehicle.settlementStatus = "open";
+    // Explicitly reset statuses so the pre-save hook's "!== closed" guard
+    // doesn't skip recalculation, leaving stale "closed" / "paid" values.
+    vehicle.buyerPaymentStatus = "pending";
+    vehicle.payeePaymentStatus = "not_started";
+    vehicle.activityLog.push({ action: "sale_undone", description: "Sale record reverted", date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+// ── Buyer Payments ────────────────────────────────────────────────
+
+export const addBuyerPayment = async (id: string, payment: {
+    date: string; amount: number; mode: string; type?: string;
+    exchangeDetails?: string; exchangeVehicleMake?: string; exchangeVehicleModel?: string;
+    exchangeVehicleYear?: number | null; exchangeVehicleColor?: string;
+    exchangeVehicleRegNo?: string;
+    referenceNo?: string; notes?: string;
+    createExchangeAs?: string; exchangeVehicleType?: string;
+}): Promise<{ vehicle: IConsignmentVehicle; exchangeVehicle?: Record<string, unknown> } | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+
+    const paymentEntry: IConsignmentVehicle["buyerPayments"][0] = {
+        _id: new mongoose.Types.ObjectId(),
+        date: new Date(payment.date),
+        amount: payment.amount,
+        mode: payment.mode as IConsignmentVehicle["buyerPayments"][0]["mode"],
+        type: (payment.type as "cash" | "exchange") ?? "cash",
+        exchangeDetails: payment.exchangeDetails,
+        exchangeVehicleMake: payment.exchangeVehicleMake,
+        exchangeVehicleRegNo: payment.exchangeVehicleRegNo,
+        referenceNo: payment.referenceNo,
+        notes: payment.notes,
+    };
+
+    let exchangeVehicle = null;
+
+    // Auto-create exchange vehicle in purchased inventory
+    // Triggers whenever type=="exchange" and createExchangeAs !== "skip"
+    const exchangeTarget = payment.createExchangeAs || (payment.type === "exchange" ? "phase2_purchase" : "skip");
+    if (payment.type === "exchange" && exchangeTarget !== "skip") {
+        const regNo = payment.exchangeVehicleRegNo || `EXCH-${Date.now()}`;
+        const vType = (payment.exchangeVehicleType || "two_wheeler") as "two_wheeler" | "four_wheeler";
+        // Use explicit make/model fields; fall back to parsing combined string for backwards compat
+        const rawMake = (payment.exchangeVehicleMake || "").trim();
+        const rawModel = (payment.exchangeVehicleModel || "").trim();
+        const makeParts = rawMake.split(/\s+/).filter(Boolean);
+        const exMake = rawMake || "Unknown Make";
+        const exModel = rawModel || makeParts.slice(1).join(" ") || exMake;
+        const exYear = payment.exchangeVehicleYear ?? null;
+        const exColor = payment.exchangeVehicleColor || undefined;
+
+        // ── Smart duplicate resolution ─────────────────────────────
+        // Rule 1: If regNo exists in Purchased Vehicles → hard block (true duplicate)
+        const existsInVehicles = await Vehicle.findOne({ registrationNo: regNo, isActive: true }).lean();
+        if (existsInVehicles) {
+            throw new Error(
+                `Vehicle with registration ${regNo} already exists in Purchased Vehicles (${(existsInVehicles as any).vehicleId}). Cannot create exchange vehicle.`
+            );
+        }
+
+        // Rule 2: If regNo exists in Consignment and target is phase2_purchase →
+        //   Migrate: soft-delete the consignment and create a new Vehicle entry.
+        // Rule 3: If regNo exists in Consignment and target is also consignment → hard block
+        const existsInConsignments = await ConsignmentVehicle.findOne({ registrationNo: regNo, isActive: true });
+        if (existsInConsignments) {
+            if (exchangeTarget !== "phase2_purchase") {
+                throw new Error(
+                    `Vehicle with registration ${regNo} already exists in Consignment Inventory (${existsInConsignments.consignmentId}). Cannot add again as consignment.`
+                );
+            }
+            // Migrate from Consignment → Purchased
+            existsInConsignments.isActive = false;
+            existsInConsignments.activityLog.push({
+                action: "migrated",
+                description: `Migrated to Purchased Inventory via exchange (from sale of ${vehicle.make} ${vehicle.model} ${vehicle.registrationNo})`,
+                date: new Date(),
+            });
+            await existsInConsignments.save();
+        }
+
+        if (exchangeTarget === "phase2_purchase") {
+            const newVehicleId = await getNextId("vehicle");
+            const sourceConsignment = existsInConsignments;
+            const exVehicle = new Vehicle({
+                vehicleId: newVehicleId,
+                vehicleType: sourceConsignment?.vehicleType || vType,
+                make: sourceConsignment?.make || exMake,
+                model: sourceConsignment?.model || exModel,
+                year: sourceConsignment?.year ?? exYear,
+                color: exColor,
+                registrationNo: regNo,
+                purchasedFrom: vehicle.soldTo || "Exchange",
+                datePurchased: new Date(payment.date),
+                purchasePrice: payment.amount,
+                fundingSource: "own",
+                isFromExchange: true,
+                exchangeSourceRef: vehicle._id as mongoose.Types.ObjectId,
+                exchangeSourceCollection: "consignmentVehicles",
+                exchangeDetails: sourceConsignment
+                    ? `Migrated from Consignment (${sourceConsignment.consignmentId}) via exchange from ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo})`
+                    : `Exchange from ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo})`,
+                status: "in_stock",
+                purchasePayments: [{
+                    _id: new mongoose.Types.ObjectId(),
+                    date: new Date(payment.date),
+                    amount: payment.amount,
+                    mode: "Cash" as const,
+                    notes: `Paid via exchange (trade-in from ${vehicle.make} ${vehicle.model} sale)`,
+                }],
+            });
+            await exVehicle.save();
+            // Log the exchange origin on the newly created vehicle
+            const exchangeOriginDesc = sourceConsignment
+                ? `Received via exchange: trade-in from ${vehicle.soldTo || "buyer"} (migrated from Consignment ${sourceConsignment.consignmentId}) — part of ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo}) sale for ₹${(vehicle.soldPrice || 0).toLocaleString("en-IN")}`
+                : `Received via exchange: trade-in from ${vehicle.soldTo || "buyer"} — part of ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo}) sale for ₹${(vehicle.soldPrice || 0).toLocaleString("en-IN")}`;
+            exVehicle.activityLog.push({
+                action: "received_via_exchange",
+                description: exchangeOriginDesc,
+                amount: payment.amount,
+                date: new Date(payment.date),
+            });
+            await exVehicle.save();
+            paymentEntry.exchangeCreatedRef = exVehicle._id as mongoose.Types.ObjectId;
+            paymentEntry.exchangeCreatedIn = "vehicles";
+            exchangeVehicle = {
+                vehicleId: exVehicle.vehicleId, collection: "vehicles",
+                make: exVehicle.make, registrationNo: exVehicle.registrationNo,
+                message: sourceConsignment
+                    ? `Migrated from Consignment (${sourceConsignment.consignmentId}) to Purchased Inventory`
+                    : "Created as Phase 2 purchase",
+            };
+        } else {
+            // phase3_park_sale or phase3_finance_sale
+            const saleType = exchangeTarget === "phase3_park_sale" ? "park_sale" : "finance_sale";
+            const newConsignmentId = await getNextId("consignment");
+            const exConsignment = new ConsignmentVehicle({
+                consignmentId: newConsignmentId,
+                saleType,
+                vehicleType: vType,
+                make: exMake,
+                model: exModel,
+                registrationNo: regNo,
+                previousOwner: vehicle.soldTo || "Exchange",
+                previousOwnerPhone: vehicle.soldToPhone,
+                dateReceived: new Date(payment.date),
+                purchasePrice: payment.amount,
+                isFromExchange: true,
+                exchangeSourceRef: vehicle._id as mongoose.Types.ObjectId,
+                exchangeSourceCollection: "consignmentVehicles",
+                exchangeDetails: `Exchange from sale: ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo}) — sold to ${vehicle.soldTo || "buyer"} for ₹${(vehicle.soldPrice || 0).toLocaleString("en-IN")}`,
+                status: "received",
+            });
+            await exConsignment.save();
+            paymentEntry.exchangeCreatedRef = exConsignment._id as mongoose.Types.ObjectId;
+            paymentEntry.exchangeCreatedIn = "consignmentVehicles";
+            exchangeVehicle = {
+                consignmentId: exConsignment.consignmentId, collection: "consignmentVehicles",
+                make: exConsignment.make, registrationNo: exConsignment.registrationNo,
+                message: `Created as Phase 3 ${saleType.replace("_", " ")}`,
+            };
+        }
+    }
+
+
+    vehicle.buyerPayments.push(paymentEntry);
+    vehicle.activityLog.push({ action: "buyer_payment", description: `Buyer payment received: ₹${payment.amount.toLocaleString("en-IN")} via ${payment.type === "exchange" ? "Exchange" : payment.mode}${payment.type === "exchange" && payment.exchangeVehicleMake ? ` (${payment.exchangeVehicleMake}${payment.exchangeVehicleRegNo ? " — " + payment.exchangeVehicleRegNo : ""})` : ""}`, amount: payment.amount, date: new Date() });
+    await vehicle.save();
+    return { vehicle, exchangeVehicle: exchangeVehicle ?? undefined };
+};
+
+export const deleteBuyerPayment = async (id: string, paymentId: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(paymentId)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+    const deleted = vehicle.buyerPayments.find(p => p._id.toString() === paymentId);
+    vehicle.buyerPayments = vehicle.buyerPayments.filter(p => p._id.toString() !== paymentId);
+    vehicle.activityLog.push({
+        action: "buyer_payment_deleted",
+        description: deleted
+            ? `Buyer payment of ₹${deleted.amount.toLocaleString("en-IN")} via ${deleted.type === "exchange" ? "Exchange" : deleted.mode} removed`
+            : "Buyer payment removed",
+        amount: deleted?.amount,
+        date: new Date(),
+    });
+    await vehicle.save();
+    return vehicle;
+};
+
+// ── Payee Payments ────────────────────────────────────────────────
+
+export const addPayeePayment = async (id: string, payment: { date: string; amount: number; mode: string; notes?: string; markClosed?: boolean }): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+
+    vehicle.payeePayments.push({
+        _id: new mongoose.Types.ObjectId(),
+        date: new Date(payment.date),
+        amount: payment.amount,
+        mode: payment.mode as IConsignmentVehicle["payeePayments"][0]["mode"],
+        notes: payment.notes,
+    });
+
+    if (payment.markClosed) {
+        vehicle.payeePaymentStatus = "closed";
+    }
+
+    const payeeLabel = vehicle.saleType === "park_sale" ? "Owner" : "Finance";
+    vehicle.activityLog.push({ action: "payee_payment", description: `${payeeLabel} payment: ₹${payment.amount.toLocaleString("en-IN")} via ${payment.mode}${payment.markClosed ? " (Marked closed)" : ""}`, amount: payment.amount, date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const deletePayeePayment = async (id: string, paymentId: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(paymentId)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+    const deleted = vehicle.payeePayments.find(p => p._id.toString() === paymentId);
+    vehicle.payeePayments = vehicle.payeePayments.filter(p => p._id.toString() !== paymentId);
+    // Reset closed status if payments deleted
+    if (vehicle.payeePaymentStatus === "closed") vehicle.payeePaymentStatus = "partial";
+    const payeeLabel = vehicle.saleType === "park_sale" ? "Owner" : "Finance";
+    vehicle.activityLog.push({
+        action: "payee_payment_deleted",
+        description: deleted
+            ? `${payeeLabel} payment of ₹${deleted.amount.toLocaleString("en-IN")} via ${deleted.mode} removed`
+            : `${payeeLabel} payment removed`,
+        amount: deleted?.amount,
+        date: new Date(),
+    });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const closePayeeSettlement = async (id: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+    vehicle.payeePaymentStatus = "closed";
+    vehicle.activityLog.push({ action: "payee_settlement_closed", description: `${vehicle.saleType === "park_sale" ? "Owner" : "Finance"} settlement marked as closed`, date: new Date() });
+    await vehicle.save();
+    return vehicle;
+};
+
+export const updateNocStatus = async (id: string, nocStatus: string): Promise<IConsignmentVehicle | null> => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, isActive: true });
+    if (!vehicle) return null;
+    const prev = vehicle.nocStatus;
+    vehicle.nocStatus = nocStatus as IConsignmentVehicle["nocStatus"];
+    await vehicle.save();
+
+    const formatNoc = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    vehicle.activityLog.push({
+        action: "NOC_UPDATE",
+        description: `NOC status updated: ${formatNoc(prev)} -> ${formatNoc(nocStatus)}`,
+        date: new Date(),
+    });
+    await vehicle.save();
+    return vehicle;
+};
+
+// ── Reports ───────────────────────────────────────────────────────
+
+export const getConsignmentReports = async (saleType?: string, dateFrom?: string, dateTo?: string): Promise<unknown> => {
+    const match: Record<string, unknown> = { isActive: true };
+    if (saleType) match.saleType = saleType;
+
+    const soldMatch: Record<string, unknown> = { ...match, dateSold: { $ne: null } };
+    if (dateFrom || dateTo) {
+        const df: Record<string, Date> = {};
+        if (dateFrom) df.$gte = new Date(dateFrom);
+        if (dateTo) df.$lte = new Date(new Date(dateTo).setHours(23, 59, 59, 999));
+        soldMatch.dateSold = df;
+    }
+
+    const [profitLoss, openSettlements, agingReport, monthlyTrends, costAnalysis] = await Promise.all([
+        ConsignmentVehicle.find(soldMatch)
+            .select("consignmentId saleType vehicleType make model registrationNo dateReceived dateSold purchasePrice totalReconCost totalInvestment soldPrice receivedAmount buyerBalance paidToPayee payeeBalance grossMargin netProfit profitLossPercentage daysInShop previousOwner settlementStatus buyerPaymentStatus payeePaymentStatus")
+            .sort({ dateSold: -1 })
+            .lean(),
+        ConsignmentVehicle.find({ ...match, dateSold: { $ne: null }, settlementStatus: { $ne: "fully_closed" } })
+            .select("consignmentId saleType make model registrationNo dateSold soldPrice receivedAmount buyerBalance paidToPayee payeeBalance buyerPaymentStatus payeePaymentStatus settlementStatus previousOwner")
+            .sort({ dateSold: -1 })
+            .lean(),
+        // Aging report: compute daysInShop live so values never go stale
+        ConsignmentVehicle.aggregate([
+            { $match: { ...match, dateSold: null, status: { $nin: ["returned"] } } },
+            {
+                $addFields: {
+                    daysInShop: {
+                        $dateDiff: { startDate: "$dateReceived", endDate: "$$NOW", unit: "day" },
+                    },
+                },
+            },
+            {
+                $project: {
+                    consignmentId: 1, saleType: 1, vehicleType: 1,
+                    make: 1, model: 1, registrationNo: 1,
+                    dateReceived: 1, daysInShop: 1,
+                    totalInvestment: 1, status: 1, previousOwner: 1,
+                },
+            },
+            { $sort: { daysInShop: -1 } },
+        ]),
+        ConsignmentVehicle.aggregate([
+            { $match: match },
+            {
+                $facet: {
+                    byReceivedMonth: [
+                        { $group: { _id: { year: { $year: "$dateReceived" }, month: { $month: "$dateReceived" }, saleType: "$saleType" }, count: { $sum: 1 }, totalInvested: { $sum: "$totalInvestment" } } },
+                        { $sort: { "_id.year": 1, "_id.month": 1 } },
+                    ],
+                    bySoldMonth: [
+                        { $match: { dateSold: { $ne: null } } },
+                        { $group: { _id: { year: { $year: "$dateSold" }, month: { $month: "$dateSold" }, saleType: "$saleType" }, count: { $sum: 1 }, totalRevenue: { $sum: "$soldPrice" }, totalNetProfit: { $sum: "$netProfit" } } },
+                        { $sort: { "_id.year": 1, "_id.month": 1 } },
+                    ],
+                },
+            },
+        ]),
+        ConsignmentVehicle.aggregate([
+            { $match: { isActive: true, dateSold: { $ne: null } } },
+            {
+                $group: {
+                    _id: null,
+                    avgTravel: { $avg: "$travelCost" },
+                    avgWorkshop: { $avg: "$workshopRepairCost" },
+                    avgSpareParts: { $avg: "$sparePartsAccessories" },
+                    avgAlignment: { $avg: "$alignmentWork" },
+                    avgPainting: { $avg: "$paintingPolishingCost" },
+                    avgWashing: { $avg: "$washingDetailingCost" },
+                    avgFuel: { $avg: "$fuelCost" },
+                    avgPaperwork: { $avg: "$paperworkTaxInsurance" },
+                    avgCommission: { $avg: "$commission" },
+                    avgOtherExpenses: { $avg: "$otherExpenses" },
+                    avgTotalRecon: { $avg: "$totalReconCost" },
+                },
+            },
+        ]),
+    ]);
+
+    return { profitLoss, openSettlements, agingReport, monthlyTrends: monthlyTrends[0], costAnalysis: costAnalysis[0] ?? {} };
+};

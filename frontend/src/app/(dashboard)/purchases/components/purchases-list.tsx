@@ -1,0 +1,670 @@
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import axios from "@config/axios";
+import { useState, useMemo } from "react";
+import Link from "next/link";
+import { formatCurrency } from "@lib/currency";
+import { formatDate } from "@lib/date";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import {
+    ShoppingCart, Search, Eye,
+    CheckCircle2, Clock, AlertTriangle, IndianRupee, Wallet, Ban,
+    TrendingUp, User, Calendar, X,
+    Download, FileText, FileSpreadsheet, Loader2, ChevronDown
+} from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useDebounce } from "@/hooks/use-debounce";
+import { getClientSession } from "@/lib/auth";
+import { toast } from "sonner";
+import VehicleTypeIcon from "../../vehicles/components/vehicle-type-icon";
+import { TablePagination } from "@components/shared";
+
+const PAGE_SIZE = 10;
+
+type DatePreset = "all" | "today" | "yesterday" | "this_week" | "this_month" | "this_year" | "last_year" | "custom";
+
+const getPresetRange = (preset: DatePreset): { dateFrom?: string; dateTo?: string } => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (preset === "today") { const t = fmt(now); return { dateFrom: t, dateTo: t }; }
+    if (preset === "yesterday") { const y = new Date(now); y.setDate(y.getDate() - 1); const t = fmt(y); return { dateFrom: t, dateTo: t }; }
+    if (preset === "this_week") {
+        const start = new Date(now); start.setDate(now.getDate() - now.getDay());
+        return { dateFrom: fmt(start), dateTo: fmt(now) };
+    }
+    if (preset === "this_month") return { dateFrom: fmt(new Date(now.getFullYear(), now.getMonth(), 1)), dateTo: fmt(now) };
+    if (preset === "this_year") return { dateFrom: fmt(new Date(now.getFullYear(), 0, 1)), dateTo: fmt(now) };
+    if (preset === "last_year") return { dateFrom: `${now.getFullYear() - 1}-01-01`, dateTo: `${now.getFullYear() - 1}-12-31` };
+    return {};
+};
+
+// ── Types ──────────────────────────────────────────────────────────
+interface PurchaseStats {
+    totalPurchasePrice: number;
+    totalInvestment: number;  // purchasePrice + all reconditioning costs
+    totalPaid: number;
+    totalPending: number;
+    pendingCount: number;
+    fullyPaidCount: number;
+}
+
+interface PurchaseVehicle {
+    _id: string;
+    vehicleId: string;
+    vehicleType: VehicleType;
+    make: string;
+    model: string;
+    registrationNo: string;
+    purchasedFrom: string;
+    purchasedFromPhone?: string;
+    datePurchased: string;
+    purchasePrice: number;
+    purchasePaymentStatus: "paid" | "partial" | "pending";
+    purchasePendingAmount: number;
+    totalInvestment: number;
+    status: string;
+    fundingSource: string;
+}
+
+interface PurchaseRegisterData {
+    data: PurchaseVehicle[];
+    total: number;
+    page: number;
+    totalPages: number;
+    stats: PurchaseStats;
+}
+
+// ── Sub-components ─────────────────────────────────────────────────
+const PaymentStatusBadge = ({ status }: { status: PurchaseVehicle["purchasePaymentStatus"] }) => {
+    if (status === "paid") {
+        return (
+            <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px] gap-1">
+                <CheckCircle2 className="h-2.5 w-2.5" />Fully Paid
+            </Badge>
+        );
+    }
+    if (status === "partial") {
+        return (
+            <Badge className="bg-orange-500/10 text-orange-400 border-orange-500/20 text-[10px] gap-1">
+                <Clock className="h-2.5 w-2.5" />Partial
+            </Badge>
+        );
+    }
+    return (
+        <Badge className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px] gap-1">
+            <Ban className="h-2.5 w-2.5" />Not Paid
+        </Badge>
+    );
+};
+
+const StatCard = ({
+    label, value, sub, color = "text-foreground", bg = "bg-card border-border", icon: Icon,
+}: { label: string; value: string; sub?: string; color?: string; bg?: string; icon: React.ElementType }) => (
+    <div className={cn("rounded-xl border p-4 flex items-start gap-3", bg)}>
+        <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+            bg.includes("emerald") ? "bg-emerald-400/15"
+                : bg.includes("red") ? "bg-red-400/15"
+                    : bg.includes("orange") ? "bg-orange-400/15"
+                        : "bg-primary/10")}>
+            <Icon className={cn("h-4 w-4", color)} />
+        </div>
+        <div className="flex-1 min-w-0">
+            <p className="text-[11px] text-muted-foreground uppercase tracking-widest font-semibold mb-0.5">{label}</p>
+            <p className={cn("text-lg font-bold leading-tight", color)}>{value}</p>
+            {sub && <p className="text-[11px] text-muted-foreground mt-0.5">{sub}</p>}
+        </div>
+    </div>
+);
+
+const fetchPurchases = async (params: Record<string, string | number>): Promise<PurchaseRegisterData | null> => {
+    const res = await axios.get<ApiResponse<PurchaseRegisterData>>("/vehicles/reports/purchases", { params });
+    return res.data.data ?? null;
+};
+
+// ── Main Component ─────────────────────────────────────────────────
+const PurchasesList = () => {
+    const [page, setPage] = useState(1);
+    const [search, setSearch] = useState("");
+    const [vehicleType, setVehicleType] = useState("all");
+    const [paymentStatus, setPaymentStatus] = useState("all");
+    const [datePreset, setDatePreset] = useState<DatePreset>("all");
+    const [customFrom, setCustomFrom] = useState("");
+    const [customTo, setCustomTo] = useState("");
+
+    const debouncedSearch = useDebounce(search, 300);
+
+    const dateRange = useMemo(() => {
+        if (datePreset === "custom") return { dateFrom: customFrom || undefined, dateTo: customTo || undefined };
+        return getPresetRange(datePreset);
+    }, [datePreset, customFrom, customTo]);
+
+    const isAnyFilterActive =
+        debouncedSearch !== "" ||
+        vehicleType !== "all" ||
+        paymentStatus !== "all" ||
+        datePreset !== "all";
+
+    const clearFilters = () => {
+        setSearch("");
+        setVehicleType("all");
+        setPaymentStatus("all");
+        setDatePreset("all");
+        setCustomFrom("");
+        setCustomTo("");
+        setPage(1);
+    };
+
+    const params: Record<string, string | number> = { page, limit: PAGE_SIZE };
+    if (debouncedSearch) params.search = debouncedSearch;
+    if (vehicleType !== "all") params.vehicleType = vehicleType;
+    if (paymentStatus !== "all") params.paymentStatus = paymentStatus;
+    if (dateRange.dateFrom) params.dateFrom = dateRange.dateFrom;
+    if (dateRange.dateTo) params.dateTo = dateRange.dateTo;
+
+    const resetPage = () => setPage(1);
+
+    const [isExporting, setIsExporting] = useState<"csv" | "pdf" | null>(null);
+
+    const handleExport = async (format: "csv" | "pdf") => {
+        setIsExporting(format);
+        const tid = toast.loading(
+            `Preparing ${format.toUpperCase()} export…`,
+            { description: "Building your purchase register report" }
+        );
+        try {
+            const p = new URLSearchParams({ format });
+            if (debouncedSearch) p.set("search", debouncedSearch);
+            if (vehicleType !== "all") p.set("vehicleType", vehicleType);
+            if (paymentStatus !== "all") p.set("paymentStatus", paymentStatus);
+            if (dateRange.dateFrom) p.set("dateFrom", dateRange.dateFrom);
+            if (dateRange.dateTo) p.set("dateTo", dateRange.dateTo);
+            const baseURL = (axios.defaults.baseURL ?? "").replace(/\/$/, "");
+            const url = `${baseURL}/vehicles/reports/purchases/export?${p.toString()}`;
+            const token = getClientSession();
+            const res = await fetch(url, {
+                credentials: "include",
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (!res.ok) throw new Error("Export failed");
+            const blob = await res.blob();
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            const fileName = `purchase_register_${new Date().toISOString().slice(0, 10)}.${format}`;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(link.href);
+            toast.success(`${format.toUpperCase()} downloaded!`, {
+                id: tid,
+                description: `${fileName} saved to your downloads folder`,
+            });
+        } catch {
+            toast.error("Export failed", {
+                id: tid,
+                description: "Could not generate the report. Please try again.",
+            });
+        } finally {
+            setIsExporting(null);
+        }
+    };
+
+    const { data, isLoading } = useQuery<PurchaseRegisterData | null>({
+        queryKey: ["purchases", { page, debouncedSearch, vehicleType, paymentStatus, dateRange }],
+        queryFn: () => fetchPurchases(params),
+        placeholderData: (prev) => prev,
+        retry: 0,
+    });
+
+    const records = data?.data ?? [];
+    const stats = data?.stats;
+    const meta = data ? { total: data.total, page: data.page, totalPages: data.totalPages } : null;
+
+    return (
+        <div className="flex w-full flex-col gap-5 pb-6">
+            {/* Header */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg">
+                        <ShoppingCart className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                        <h1 className="text-2xl font-bold text-foreground">Purchase Register</h1>
+                        <p className="text-sm text-muted-foreground">Track all vehicle purchases and payments due to sellers</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button variant="outline" size="sm" className="border-border text-muted-foreground hover:text-foreground" disabled={!!isExporting}>
+                                {isExporting ? (
+                                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                ) : (
+                                    <Download className="mr-1.5 h-4 w-4" />
+                                )}
+                                Export
+                                <ChevronDown className="ml-1 h-3 w-3 opacity-60" />
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuLabel className="text-xs text-muted-foreground">Download as</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => handleExport("csv")} disabled={isExporting === "csv"} className="gap-2 cursor-pointer">
+                                <FileSpreadsheet className="h-4 w-4 text-emerald-500" />
+                                <div>
+                                    <p className="text-sm font-medium">Export CSV</p>
+                                    <p className="text-[10px] text-muted-foreground">Excel compatible</p>
+                                </div>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleExport("pdf")} disabled={isExporting === "pdf"} className="gap-2 cursor-pointer">
+                                <FileText className="h-4 w-4 text-red-500" />
+                                <div>
+                                    <p className="text-sm font-medium">Export PDF</p>
+                                    <p className="text-[10px] text-muted-foreground">Formatted report</p>
+                                </div>
+                            </DropdownMenuItem>
+                            {isAnyFilterActive && (
+                                <>
+                                    <DropdownMenuSeparator />
+                                    <p className="px-2 py-1 text-[10px] text-primary">✦ Exports respect active filters</p>
+                                </>
+                            )}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                </div>
+            </div>
+
+            {/* Stats */}
+            {stats && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <StatCard
+                        label="Total Purchase Value"
+                        value={formatCurrency(stats.totalPurchasePrice)}
+                        sub={`${meta?.total ?? 0} vehicles`}
+                        icon={IndianRupee}
+                        bg="bg-card border-border"
+                    />
+                    <StatCard
+                        label="Paid to Sellers"
+                        value={formatCurrency(stats.totalPaid)}
+                        sub={`${stats.fullyPaidCount} fully paid`}
+                        color="text-emerald-400"
+                        bg="bg-emerald-500/5 border-emerald-500/20"
+                        icon={CheckCircle2}
+                    />
+                    <StatCard
+                        label="Pending to Sellers"
+                        value={formatCurrency(stats.totalPending)}
+                        sub={`${stats.pendingCount} vehicles due`}
+                        color="text-red-400"
+                        bg="bg-red-500/5 border-red-500/20"
+                        icon={AlertTriangle}
+                    />
+                    <StatCard
+                        label="Total Invested"
+                        value={formatCurrency(stats.totalInvestment ?? stats.totalPurchasePrice)}
+                        sub="Purchase price + reconditioning costs"
+                        color="text-blue-400"
+                        bg="bg-blue-500/5 border-blue-500/20"
+                        icon={Wallet}
+                    />
+                </div>
+            )}
+
+            {/* Pending alert */}
+            {stats && stats.pendingCount > 0 && (
+                <div className="flex items-center gap-3 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
+                    <p className="text-sm text-red-300">
+                        <strong className="text-red-400">{stats.pendingCount}</strong> vehicle{stats.pendingCount !== 1 ? "s" : ""} with payment due to sellers — total{" "}
+                        <strong className="text-red-400">{formatCurrency(stats.totalPending)}</strong> pending.
+                    </p>
+                </div>
+            )}
+
+            {/* Filters */}
+            <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            className="pl-9 h-10 bg-muted/50 border-border"
+                            placeholder="Search vehicle, seller, reg.no..."
+                            value={search}
+                            onChange={(e) => { setSearch(e.target.value); resetPage(); }}
+                        />
+                    </div>
+                    <Select value={vehicleType} onValueChange={(v) => { setVehicleType(v); resetPage(); }}>
+                        <SelectTrigger className="h-10 w-full sm:w-44 bg-muted/50 border-border">
+                            <SelectValue placeholder="All Types" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Types</SelectItem>
+                            <SelectItem value="two_wheeler">🏍️ Two Wheelers</SelectItem>
+                            <SelectItem value="four_wheeler">🚗 Four Wheelers</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Select value={paymentStatus} onValueChange={(v) => { setPaymentStatus(v); resetPage(); }}>
+                        <SelectTrigger className="h-10 w-full sm:w-44 bg-muted/50 border-border">
+                            <SelectValue placeholder="All Payments" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Payments</SelectItem>
+                            <SelectItem value="paid">✅ Fully Paid</SelectItem>
+                            <SelectItem value="partial">🔶 Partial</SelectItem>
+                            <SelectItem value="pending">🔴 Not Paid</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                {/* Date Range Row */}
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
+                        <Calendar className="h-3.5 w-3.5" />
+                        <span className="font-medium">Purchase Date:</span>
+                    </div>
+                    <Select value={datePreset} onValueChange={(v) => { setDatePreset(v as DatePreset); resetPage(); }}>
+                        <SelectTrigger className="h-10 w-full sm:w-48 bg-muted/50 border-border">
+                            <SelectValue placeholder="All Time" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Time</SelectItem>
+                            <SelectItem value="today">Today</SelectItem>
+                            <SelectItem value="yesterday">Yesterday</SelectItem>
+                            <SelectItem value="this_week">This Week</SelectItem>
+                            <SelectItem value="this_month">This Month</SelectItem>
+                            <SelectItem value="this_year">This Year</SelectItem>
+                            <SelectItem value="last_year">Last Year</SelectItem>
+                            <SelectItem value="custom">Custom Range…</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    {datePreset === "custom" && (
+                        <div className="flex items-center gap-2">
+                            <Input
+                                type="date"
+                                value={customFrom}
+                                onChange={(e) => { setCustomFrom(e.target.value); resetPage(); }}
+                                className="h-10 w-40 bg-muted/50 border-border text-sm"
+                            />
+                            <span className="text-xs text-muted-foreground">to</span>
+                            <Input
+                                type="date"
+                                value={customTo}
+                                onChange={(e) => { setCustomTo(e.target.value); resetPage(); }}
+                                className="h-10 w-40 bg-muted/50 border-border text-sm"
+                            />
+                        </div>
+                    )}
+                </div>
+
+                {/* Active Filters Indicator */}
+                {isAnyFilterActive && (
+                    <div className="flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+                        <div className="flex items-center gap-2 text-xs text-primary">
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse inline-block" />
+                            <span className="font-medium">Filters active</span>
+                            <span className="text-muted-foreground">— showing filtered results</span>
+                        </div>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearFilters}
+                            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        >
+                            <X className="h-3 w-3" />
+                            Clear Filters
+                        </Button>
+                    </div>
+                )}
+            </div>
+
+            {/* Data View */}
+            <div className="rounded-xl border border-border bg-card overflow-hidden">
+                {/* Mobile Cards View (< md) */}
+                <div className="grid grid-cols-1 gap-4 p-4 md:hidden bg-muted/10">
+                    {isLoading ? (
+                        Array.from({ length: 4 }).map((_, i) => (
+                            <div key={i} className="h-40 animate-pulse rounded-xl bg-muted/40 border border-border/50" />
+                        ))
+                    ) : records.length === 0 ? (
+                        <div className="py-12 text-center text-sm text-muted-foreground">
+                            <ShoppingCart className="h-8 w-8 mx-auto mb-3 opacity-30" />
+                            No vehicles found
+                        </div>
+                    ) : (
+                        records.map((v) => {
+                            const paidAmount = v.purchasePrice - v.purchasePendingAmount;
+                            const paidPct = v.purchasePrice > 0 ? (paidAmount / v.purchasePrice) * 100 : 100;
+                            return (
+                                <Link key={v._id} href={`/vehicles/${v._id}`} className="group relative flex flex-col rounded-2xl border border-border/60 bg-gradient-to-b from-card to-muted/10 p-5 shadow-sm hover:shadow-md hover:border-primary/30 transition-all overflow-hidden">
+                                    {/* Decorative background glow */}
+                                    <div className="absolute top-0 right-0 -mt-4 -mr-4 h-24 w-24 rounded-full bg-primary/10 blur-2xl opacity-50 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                                    
+                                    {/* Top colored status bar */}
+                                    {v.purchasePendingAmount > 0 ? (
+                                        <div className="absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-orange-400 to-red-500" />
+                                    ) : (
+                                        <div className="absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-emerald-400 to-emerald-500" />
+                                    )}
+
+                                    {/* Header: Date & Status */}
+                                    <div className="relative flex items-center justify-between mb-4">
+                                        <div className="flex items-center gap-2 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+                                            <span className="flex items-center justify-center h-6 w-6 rounded bg-muted/80">
+                                                <VehicleTypeIcon type={v.vehicleType} className="h-3.5 w-3.5" />
+                                            </span>
+                                            {formatDate(v.datePurchased)}
+                                        </div>
+                                        <PaymentStatusBadge status={v.purchasePaymentStatus} />
+                                    </div>
+
+                                    {/* Vehicle & Seller */}
+                                    <div className="relative mb-5 flex flex-col items-start">
+                                        <p className="text-lg font-bold text-foreground tracking-tight leading-none mb-1.5 group-hover:text-primary transition-colors">{v.make} {v.model}</p>
+                                        <p className="text-[11px] font-medium text-muted-foreground mb-3">REG: <span className="text-foreground">{v.registrationNo}</span></p>
+                                        
+                                        <div className="inline-flex items-center gap-2 rounded-lg bg-muted/40 px-2.5 py-1.5 border border-border/50">
+                                            <div className="h-5 w-5 rounded-full bg-muted-foreground/20 flex items-center justify-center shrink-0">
+                                                <User className="h-3 w-3 text-muted-foreground" />
+                                            </div>
+                                            <span className="text-xs font-medium text-foreground truncate max-w-[110px] sm:max-w-[180px]">{v.purchasedFrom}</span>
+                                            {v.purchasedFromPhone && <span className="text-[10px] text-muted-foreground ml-1 shrink-0">· {v.purchasedFromPhone}</span>}
+                                        </div>
+                                    </div>
+
+                                    {/* Price & Balance Section - Bank App Style */}
+                                    <div className="relative mt-auto pt-4 border-t border-border/60 border-dashed">
+                                        <div className="flex items-end justify-between mb-4">
+                                            <div>
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Total Price</p>
+                                                <p className="text-xl font-bold text-foreground tabular-nums leading-none tracking-tight">{formatCurrency(v.purchasePrice)}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                {v.purchasePendingAmount > 0 ? (
+                                                    <>
+                                                        <p className="text-[10px] font-bold uppercase tracking-widest text-red-400 mb-1">Due Balance</p>
+                                                        <p className="text-base font-bold text-red-500 tabular-nums leading-none">{formatCurrency(v.purchasePendingAmount)}</p>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 mb-1.5">Fully Settled</p>
+                                                        <div className="flex items-center justify-end gap-1">
+                                                            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                                                            <p className="text-sm font-bold text-emerald-500 tabular-nums leading-none">{formatCurrency(paidAmount)}</p>
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Progress Bar & Details */}
+                                        <div>
+                                            <div className="relative h-1.5 w-full rounded-full bg-muted/80 overflow-hidden mb-2">
+                                                <div 
+                                                    className={cn("absolute top-0 left-0 h-full transition-all duration-700 ease-out", 
+                                                        paidPct >= 100 ? "bg-emerald-500" : paidPct > 0 ? "bg-gradient-to-r from-orange-400 to-emerald-400" : "bg-red-500"
+                                                    )}
+                                                    style={{ width: `${Math.min(paidPct, 100)}%` }}
+                                                />
+                                            </div>
+                                            <div className="flex justify-between items-center">
+                                                <p className="text-[10px] text-muted-foreground font-semibold">Paid: <span className="text-foreground">{formatCurrency(paidAmount)}</span></p>
+                                                <p className="text-[10px] text-muted-foreground font-semibold">{paidPct.toFixed(0)}% Completed</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </Link>
+                            );
+                        })
+                    )}
+                </div>
+
+                {/* Desktop Table View (>= md) */}
+                <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full min-w-[800px] text-sm">
+                        <thead>
+                            <tr className="border-b border-border bg-muted/30">
+                                {["Type", "Date", "Vehicle", "Seller", "Purchase Price", "Paid", "Pending", "Status", "View"].map((h) => (
+                                    <th key={h} className={cn(
+                                        "px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider",
+                                        ["Purchase Price", "Paid", "Pending"].includes(h) ? "text-right" : h === "Status" || h === "View" ? "text-center" : "text-left"
+                                    )}>{h}</th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                            {isLoading ? (
+                                Array.from({ length: 6 }).map((_, i) => (
+                                    <tr key={i} className="animate-pulse">
+                                        {Array.from({ length: 9 }).map((_, j) => (
+                                            <td key={j} className="px-4 py-3"><div className="h-4 rounded bg-muted/60" /></td>
+                                        ))}
+                                    </tr>
+                                ))
+                            ) : records.length === 0 ? (
+                                <tr>
+                                    <td colSpan={9} className="px-4 py-12 text-center text-muted-foreground">
+                                        <ShoppingCart className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                                        No vehicles found
+                                    </td>
+                                </tr>
+                            ) : (
+                                records.map((v) => {
+                                    const paidAmount = v.purchasePrice - v.purchasePendingAmount;
+                                    const paidPct = v.purchasePrice > 0 ? (paidAmount / v.purchasePrice) * 100 : 100;
+                                    return (
+                                        <tr key={v._id} className="hover:bg-muted/20 transition-colors group">
+                                            <td className="px-4 py-3">
+                                                <VehicleTypeIcon type={v.vehicleType} className="text-muted-foreground" />
+                                            </td>
+                                            <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                                                {formatDate(v.datePurchased)}
+                                            </td>
+                                            <td className="px-4 py-3 min-w-[160px]">
+                                                <p className="font-semibold text-foreground">{v.make} {v.model}</p>
+                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                    <p className="text-[11px] text-muted-foreground font-mono">{v.registrationNo}</p>
+                                                    <span className="text-[10px] text-muted-foreground/50">{v.vehicleId}</span>
+                                                </div>
+                                                {/* Payment progress bar */}
+                                                <div className="mt-1.5 h-1 w-full max-w-[120px] rounded-full bg-muted/60">
+                                                    <div
+                                                        className={cn("h-full rounded-full transition-all", paidPct >= 100 ? "bg-emerald-500" : paidPct > 0 ? "bg-orange-400" : "bg-red-500")}
+                                                        style={{ width: `${Math.min(paidPct, 100)}%` }}
+                                                    />
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <p className="text-sm text-foreground">{v.purchasedFrom}</p>
+                                                {v.purchasedFromPhone && (
+                                                    <p className="text-[11px] text-muted-foreground">{v.purchasedFromPhone}</p>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-semibold text-foreground whitespace-nowrap">
+                                                {formatCurrency(v.purchasePrice)}
+                                            </td>
+                                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                                                <span className="font-semibold text-emerald-400">{formatCurrency(paidAmount)}</span>
+                                                <p className="text-[10px] text-muted-foreground">{paidPct.toFixed(0)}%</p>
+                                            </td>
+                                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                                                <span className={cn("font-semibold", v.purchasePendingAmount > 0 ? "text-red-400" : "text-emerald-400")}>
+                                                    {formatCurrency(v.purchasePendingAmount)}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                                <PaymentStatusBadge status={v.purchasePaymentStatus} />
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                                <Link href={`/vehicles/${v._id}`}>
+                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <Eye className="h-4 w-4" />
+                                                    </Button>
+                                                </Link>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                        {/* Summary footer row */}
+                        {stats && records.length > 0 && (
+                            <tfoot>
+                                <tr className="border-t-2 border-border bg-muted/20 font-bold text-sm">
+                                    <td colSpan={4} className="px-4 py-3 text-muted-foreground text-xs uppercase tracking-wider">
+                                        Page Subtotal
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-foreground">
+                                        {formatCurrency(records.reduce((s, v) => s + v.purchasePrice, 0))}
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-emerald-400">
+                                        {formatCurrency(records.reduce((s, v) => s + (v.purchasePrice - v.purchasePendingAmount), 0))}
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-red-400">
+                                        {formatCurrency(records.reduce((s, v) => s + v.purchasePendingAmount, 0))}
+                                    </td>
+                                    <td colSpan={2} />
+                                </tr>
+                            </tfoot>
+                        )}
+                    </table>
+                </div>
+
+                {/* Pagination */}
+                {meta && (
+                    <TablePagination
+                        page={page}
+                        totalPages={meta.totalPages}
+                        total={meta.total}
+                        limit={PAGE_SIZE}
+                        onPageChange={setPage}
+                        isLoading={isLoading}
+                    />
+                )}
+            </div>
+
+            {/* Record count */}
+            {!isLoading && meta && (
+                <p className="text-xs text-muted-foreground">
+                    Showing <strong className="text-foreground">{records.length}</strong> of <strong className="text-foreground">{meta.total}</strong> vehicles
+                </p>
+            )}
+
+            {/* Summary help text */}
+            <div className="flex items-start gap-2 rounded-xl border border-border bg-card/60 px-4 py-3">
+                <TrendingUp className="h-4 w-4 mt-0.5 text-blue-400 shrink-0" />
+                <p className="text-xs text-muted-foreground">
+                    <strong className="text-foreground">Tip:</strong> Click the eye icon on any row to open the vehicle detail page where you can record purchase payments and track full payment history.
+                </p>
+            </div>
+        </div>
+    );
+};
+
+export default PurchasesList;

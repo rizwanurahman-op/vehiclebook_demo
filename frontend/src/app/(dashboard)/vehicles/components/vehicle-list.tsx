@@ -1,0 +1,583 @@
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import axios from "@config/axios";
+import { getClientSession } from "@/lib/auth";
+import { useState, useMemo, useEffect } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { formatINR } from "@lib/currency";
+import { formatDate } from "@lib/date";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Plus, Search, Download, Package, Eye, TrendingUp, TrendingDown, ArrowLeftRight, Calendar, X, FileText, FileSpreadsheet, Loader2, ChevronDown } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import VehicleStatusBadge from "./vehicle-status-badge";
+import VehicleTypeIcon from "./vehicle-type-icon";
+import VehicleStatsCards from "./vehicle-stats-cards";
+import type { VehicleStatsFilters } from "./vehicle-stats-cards";
+import { VEHICLE_STATUSES } from "@data/vehicle-constants";
+import { toast } from "sonner";
+import { AdminOnly, TablePagination } from "@components/shared";
+
+const PAGE_SIZE = 10;
+
+type VehicleListProps = { initialData: VehiclePaginatedData | null };
+
+type DatePreset = "all" | "today" | "yesterday" | "this_week" | "this_month" | "this_year" | "last_year" | "custom";
+
+const getPresetRange = (preset: DatePreset): { dateFrom?: string; dateTo?: string } => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (preset === "today") { const t = fmt(now); return { dateFrom: t, dateTo: t }; }
+    if (preset === "yesterday") { const y = new Date(now); y.setDate(y.getDate() - 1); const t = fmt(y); return { dateFrom: t, dateTo: t }; }
+    if (preset === "this_week") {
+        const start = new Date(now); start.setDate(now.getDate() - now.getDay());
+        return { dateFrom: fmt(start), dateTo: fmt(now) };
+    }
+    if (preset === "this_month") return { dateFrom: fmt(new Date(now.getFullYear(), now.getMonth(), 1)), dateTo: fmt(now) };
+    if (preset === "this_year") return { dateFrom: fmt(new Date(now.getFullYear(), 0, 1)), dateTo: fmt(now) };
+    if (preset === "last_year") return { dateFrom: `${now.getFullYear() - 1}-01-01`, dateTo: `${now.getFullYear() - 1}-12-31` };
+    return {};
+};
+
+const fetchVehicles = async (params: Record<string, string | number>): Promise<VehiclePaginatedData | null> => {
+    const response = await axios.get<ApiResponse<VehiclePaginatedData>>("/vehicles", { params });
+    return response.data.data ?? null;
+};
+
+const VehicleList = ({ initialData }: VehicleListProps) => {
+    const searchParams = useSearchParams();
+    const defaultType = searchParams.get("type") || "";
+
+    const [page, setPage] = useState(1);
+    const [search, setSearch] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
+    const [vehicleType, setVehicleType] = useState<string>(defaultType || "all");
+    const [statusFilter, setStatusFilter] = useState("all");
+    const [sourceFilter, setSourceFilter] = useState("all");
+    const [datePreset, setDatePreset] = useState<DatePreset>("all");
+    const [customFrom, setCustomFrom] = useState("");
+    const [customTo, setCustomTo] = useState("");
+
+    // Debounce search input 300ms — avoids hammering API on every keystroke
+    useEffect(() => {
+        const timer = setTimeout(() => { setDebouncedSearch(search); setPage(1); }, 300);
+        return () => clearTimeout(timer);
+    }, [search]);
+
+    const isAnyFilterActive =
+        debouncedSearch !== "" ||
+        vehicleType !== "all" ||
+        statusFilter !== "all" ||
+        sourceFilter !== "all" ||
+        datePreset !== "all";
+
+    const clearFilters = () => {
+        setSearch("");
+        setDebouncedSearch("");
+        setVehicleType("all");
+        setStatusFilter("all");
+        setSourceFilter("all");
+        setDatePreset("all");
+        setCustomFrom("");
+        setCustomTo("");
+        setPage(1);
+    };
+
+    const resolvedVehicleType = vehicleType !== "all" ? vehicleType : undefined;
+
+    const dateRange = useMemo(() => {
+        if (datePreset === "custom") return { dateFrom: customFrom || undefined, dateTo: customTo || undefined };
+        return getPresetRange(datePreset);
+    }, [datePreset, customFrom, customTo]);
+
+    const { data, isLoading } = useQuery<VehiclePaginatedData | null>({
+        queryKey: ["vehicles", { page, debouncedSearch, vehicleType, statusFilter, sourceFilter, dateRange }],
+        queryFn: () => fetchVehicles({
+            page,
+            limit: PAGE_SIZE,
+            ...(debouncedSearch && { search: debouncedSearch }),
+            ...(resolvedVehicleType && { vehicleType: resolvedVehicleType }),
+            ...(statusFilter !== "all" && { status: statusFilter }),
+            ...(sourceFilter === "exchange" && { isFromExchange: "true" }),
+            ...(sourceFilter === "purchased" && { isFromExchange: "false" }),
+            ...(dateRange.dateFrom && { dateFrom: dateRange.dateFrom }),
+            ...(dateRange.dateTo && { dateTo: dateRange.dateTo }),
+        }),
+        initialData: vehicleType === defaultType ? initialData : undefined,
+        placeholderData: (prev) => prev,
+        retry: 0,
+    });
+
+    const vehicles = data?.data ?? [];
+    const meta = data ? { total: data.total, page: data.page, totalPages: data.totalPages } : null;
+
+    // Derive stats filter from current UI state — stats cards refetch whenever this changes
+    const statsFilters = useMemo((): VehicleStatsFilters => ({
+        ...(debouncedSearch && { search: debouncedSearch }),
+        ...(resolvedVehicleType && { vehicleType: resolvedVehicleType }),
+        ...(dateRange.dateFrom && { dateFrom: dateRange.dateFrom }),
+        ...(dateRange.dateTo && { dateTo: dateRange.dateTo }),
+        ...(statusFilter !== "all" && { status: statusFilter }),
+        ...(sourceFilter === "exchange" && { isFromExchange: "true" }),
+        ...(sourceFilter === "purchased" && { isFromExchange: "false" }),
+    }), [debouncedSearch, resolvedVehicleType, dateRange, statusFilter, sourceFilter]);
+
+    const [isExporting, setIsExporting] = useState<"csv" | "pdf" | null>(null);
+
+    const handleExport = async (format: "csv" | "pdf") => {
+        setIsExporting(format);
+        const tid = toast.loading(
+            `Preparing ${format.toUpperCase()} export…`,
+            { description: "Building your vehicle inventory report" }
+        );
+        try {
+            const params = new URLSearchParams({ format });
+            if (debouncedSearch) params.set("search", debouncedSearch);
+            if (resolvedVehicleType) params.set("vehicleType", resolvedVehicleType);
+            if (statusFilter !== "all") params.set("status", statusFilter);
+            if (sourceFilter === "exchange") params.set("isFromExchange", "true");
+            if (sourceFilter === "purchased") params.set("isFromExchange", "false");
+            if (dateRange.dateFrom) params.set("dateFrom", dateRange.dateFrom);
+            if (dateRange.dateTo) params.set("dateTo", dateRange.dateTo);
+
+            const baseURL = (axios.defaults.baseURL ?? "").replace(/\/$/, "");
+            const url = `${baseURL}/vehicles/export?${params.toString()}`;
+            const token = getClientSession();
+            const res = await fetch(url, {
+                credentials: "include",
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (!res.ok) throw new Error("Export failed");
+            const blob = await res.blob();
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            const fileName = `vehicles_${new Date().toISOString().slice(0, 10)}.${format}`;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(link.href);
+            toast.success(`${format.toUpperCase()} downloaded!`, {
+                id: tid,
+                description: `${fileName} saved to your downloads folder`,
+            });
+        } catch {
+            toast.error("Export failed", {
+                id: tid,
+                description: "Could not generate the report. Please try again.",
+            });
+        } finally {
+            setIsExporting(null);
+        }
+    };
+
+    return (
+        <div className="flex w-full flex-col gap-5 pb-6">
+            {/* Page Header */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-brand shadow-lg">
+                        <Package className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                        <h1 className="text-2xl font-bold text-foreground">Vehicle Inventory</h1>
+                        <p className="text-sm text-muted-foreground">Manage all purchased vehicles</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button variant="outline" size="sm" className="border-border text-muted-foreground hover:text-foreground" disabled={!!isExporting}>
+                                {isExporting ? (
+                                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                                ) : (
+                                    <Download className="mr-1.5 h-4 w-4" />
+                                )}
+                                Export
+                                <ChevronDown className="ml-1 h-3 w-3 opacity-60" />
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuLabel className="text-xs text-muted-foreground">Download as</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                                onClick={() => handleExport("csv")}
+                                disabled={isExporting === "csv"}
+                                className="gap-2 cursor-pointer"
+                            >
+                                <FileSpreadsheet className="h-4 w-4 text-emerald-500" />
+                                <div>
+                                    <p className="text-sm font-medium">Export CSV</p>
+                                    <p className="text-[10px] text-muted-foreground">Excel compatible</p>
+                                </div>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                                onClick={() => handleExport("pdf")}
+                                disabled={isExporting === "pdf"}
+                                className="gap-2 cursor-pointer"
+                            >
+                                <FileText className="h-4 w-4 text-red-500" />
+                                <div>
+                                    <p className="text-sm font-medium">Export PDF</p>
+                                    <p className="text-[10px] text-muted-foreground">Formatted report</p>
+                                </div>
+                            </DropdownMenuItem>
+                            {isAnyFilterActive && (
+                                <>
+                                    <DropdownMenuSeparator />
+                                    <p className="px-2 py-1 text-[10px] text-primary">✦ Exports respect active filters</p>
+                                </>
+                            )}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                    <AdminOnly>
+                        <Link href="/vehicles/new">
+                            <Button className="bg-gradient-brand cursor-pointer text-white shadow-lg hover:opacity-90">
+                                <Plus className="mr-2 h-4 w-4" /> Add Vehicle
+                            </Button>
+                        </Link>
+                    </AdminOnly>
+                </div>
+            </div>
+
+            {/* Stats Cards — reactive to all active filters */}
+            <VehicleStatsCards filters={statsFilters} />
+
+            {/* Filters */}
+            <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                            placeholder="Search by vehicle name, reg. no., seller…"
+                            className="h-10 bg-muted/50 pl-9 border-border"
+                            value={search}
+                            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+                        />
+                    </div>
+                    {/* Vehicle Type Dropdown */}
+                    <Select value={vehicleType} onValueChange={(v) => { setVehicleType(v); setPage(1); }}>
+                        <SelectTrigger className="h-10 w-full sm:w-44 bg-muted/50 border-border">
+                            <SelectValue placeholder="All Vehicles" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Vehicles</SelectItem>
+                            <SelectItem value="two_wheeler">🏍️ Two Wheelers</SelectItem>
+                            <SelectItem value="four_wheeler">🚗 Four Wheelers</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Select value={sourceFilter} onValueChange={(v) => { setSourceFilter(v); setPage(1); }}>
+                        <SelectTrigger className="h-10 w-full sm:w-40 bg-muted/50 border-border">
+                            <SelectValue placeholder="All Sources" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Sources</SelectItem>
+                            <SelectItem value="purchased">🛒 Purchased</SelectItem>
+                            <SelectItem value="exchange">🔄 From Exchange</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
+                        <SelectTrigger className="h-10 w-full sm:w-44 bg-muted/50 border-border">
+                            <SelectValue placeholder="All Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Status</SelectItem>
+                            {VEHICLE_STATUSES.map((s) => (
+                                <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                {/* Date Range Row */}
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
+                        <Calendar className="h-3.5 w-3.5" />
+                        <span className="font-medium">Purchase Date:</span>
+                    </div>
+                    <Select value={datePreset} onValueChange={(v) => { setDatePreset(v as DatePreset); setPage(1); }}>
+                        <SelectTrigger className="h-10 w-full sm:w-48 bg-muted/50 border-border">
+                            <SelectValue placeholder="All Time" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Time</SelectItem>
+                            <SelectItem value="today">Today</SelectItem>
+                            <SelectItem value="yesterday">Yesterday</SelectItem>
+                            <SelectItem value="this_week">This Week</SelectItem>
+                            <SelectItem value="this_month">This Month</SelectItem>
+                            <SelectItem value="this_year">This Year</SelectItem>
+                            <SelectItem value="last_year">Last Year</SelectItem>
+                            <SelectItem value="custom">Custom Range…</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    {datePreset === "custom" && (
+                        <div className="flex items-center gap-2">
+                            <Input
+                                type="date"
+                                value={customFrom}
+                                onChange={(e) => { setCustomFrom(e.target.value); setPage(1); }}
+                                className="h-10 w-40 bg-muted/50 border-border text-sm"
+                            />
+                            <span className="text-xs text-muted-foreground">to</span>
+                            <Input
+                                type="date"
+                                value={customTo}
+                                onChange={(e) => { setCustomTo(e.target.value); setPage(1); }}
+                                className="h-10 w-40 bg-muted/50 border-border text-sm"
+                            />
+                        </div>
+                    )}
+                </div>
+
+                {/* Active Filters Indicator + Clear Button */}
+                {isAnyFilterActive && (
+                    <div className="flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+                        <div className="flex items-center gap-2 text-xs text-primary">
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse inline-block" />
+                            <span className="font-medium">Filters active</span>
+                            <span className="text-muted-foreground">— showing filtered results</span>
+                        </div>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearFilters}
+                            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                        >
+                            <X className="h-3 w-3" />
+                            Clear Filters
+                        </Button>
+                    </div>
+                )}
+            </div>
+
+            {/* Data View */}
+            <div className="rounded-xl border border-border bg-card overflow-hidden">
+                {/* Mobile Cards View (< md) */}
+                <div className="grid grid-cols-1 gap-4 p-4 md:hidden bg-muted/10">
+                    {isLoading ? (
+                        Array.from({ length: 4 }).map((_, i) => (
+                            <div key={i} className="h-40 animate-pulse rounded-2xl bg-muted/40 border border-border/50" />
+                        ))
+                    ) : vehicles.length === 0 ? (
+                        <div className="py-12 text-center text-sm text-muted-foreground">
+                            <Package className="h-8 w-8 mx-auto mb-3 opacity-30" />
+                            No vehicles found
+                        </div>
+                    ) : (
+                        vehicles.map((v) => {
+                            const isSold = v.dateSold && v.soldPrice;
+                            const pl = v.profitLoss;
+                            const isProfit = pl >= 0;
+
+                            return (
+                                <Link key={v._id} href={`/vehicles/${v._id}`} className="group relative flex flex-col rounded-2xl border border-border/60 bg-gradient-to-b from-card to-muted/10 p-5 shadow-sm hover:shadow-md hover:border-primary/30 transition-all overflow-hidden">
+                                    {/* Decorative background glow */}
+                                    <div className="absolute top-0 right-0 -mt-4 -mr-4 h-24 w-24 rounded-full bg-primary/10 blur-2xl opacity-50 group-hover:opacity-100 transition-opacity pointer-events-none" />
+
+                                    {/* Top colored status bar */}
+                                    {v.status === 'sold' ? (
+                                        <div className="absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-emerald-400 to-emerald-500" />
+                                    ) : (
+                                        <div className="absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-blue-400 to-blue-500" />
+                                    )}
+
+                                    {/* Header: Date & Status */}
+                                    <div className="relative flex items-center justify-between mb-4">
+                                        <div className="flex items-center gap-2 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+                                            <span className="flex items-center justify-center h-6 w-6 rounded bg-muted/80">
+                                                <VehicleTypeIcon type={v.vehicleType} className="h-3.5 w-3.5" />
+                                            </span>
+                                            {formatDate(v.datePurchased)}
+                                        </div>
+                                        <div className="flex flex-col items-end gap-1">
+                                            <VehicleStatusBadge status={v.status} />
+                                        </div>
+                                    </div>
+
+                                    {/* Vehicle & Source */}
+                                    <div className="relative mb-5 flex flex-col items-start">
+                                        <p className="text-lg font-bold text-foreground tracking-tight leading-none mb-1.5 group-hover:text-primary transition-colors">{v.make} {v.model}</p>
+                                        <div className="flex flex-wrap items-center gap-2 mb-3">
+                                            <span className="text-[11px] font-medium text-muted-foreground">REG: <span className="text-foreground">{v.registrationNo}</span></span>
+                                            <span className="text-[10px] text-muted-foreground font-mono bg-muted/50 px-1 rounded">{v.vehicleId}</span>
+                                        </div>
+                                        
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            <div className="inline-flex items-center gap-1.5 rounded-lg bg-muted/40 px-2 py-1 border border-border/50">
+                                                <span className="text-[10px] font-medium text-muted-foreground">From: <span className="text-foreground truncate max-w-[100px] inline-block align-bottom">{v.purchasedFrom || "—"}</span></span>
+                                            </div>
+                                            {v.saleStatus && <VehicleStatusBadge saleStatus={v.saleStatus} />}
+                                            {v.isExchange && (
+                                                <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                                                    <ArrowLeftRight className="h-2 w-2" />Exchange Sale
+                                                </span>
+                                            )}
+                                            {v.isFromExchange && (
+                                                <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                                    <ArrowLeftRight className="h-2 w-2" />Exchanged In
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Financial Section - Bank App Style */}
+                                    <div className="relative mt-auto pt-4 border-t border-border/60 border-dashed">
+                                        <div className="flex items-end justify-between">
+                                            <div>
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Total Invested</p>
+                                                <p className="text-xl font-mono font-bold text-foreground tabular-nums whitespace-nowrap leading-none tracking-tight">{formatINR(v.totalInvestment)}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                {isSold ? (
+                                                    <>
+                                                        <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Profit/Loss</p>
+                                                        <span className={cn("inline-flex items-center justify-end gap-1 font-bold text-base tabular-nums leading-none", isProfit ? "text-emerald-500" : "text-red-500")}>
+                                                            {isProfit ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+                                                            {isProfit ? "+" : ""}{formatINR(pl)}
+                                                        </span>
+                                                    </>
+                                                ) : (
+                                                    <div className="flex flex-col items-end h-full justify-end">
+                                                        <span className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground/50 border border-border/40 rounded px-2 py-1">Unrealized</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </Link>
+                            );
+                        })
+                    )}
+                </div>
+
+                {/* Desktop Table View (>= md) */}
+                <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full min-w-[800px] text-sm">
+                        <thead>
+                            <tr className="border-b border-border bg-muted/30">
+                                <th className="px-4 py-3 text-left text-xs font-bold tracking-wider text-muted-foreground uppercase">Type</th>
+                                <th className="px-4 py-3 text-left text-xs font-bold tracking-wider text-muted-foreground uppercase">Date</th>
+                                <th className="px-4 py-3 text-left text-xs font-bold tracking-wider text-muted-foreground uppercase">Vehicle</th>
+                                <th className="px-4 py-3 text-left text-xs font-bold tracking-wider text-muted-foreground uppercase">Reg. No.</th>
+                                <th className="px-4 py-3 text-right text-xs font-bold tracking-wider text-muted-foreground uppercase">Invested</th>
+                                <th className="px-4 py-3 text-right text-xs font-bold tracking-wider text-muted-foreground uppercase">P&L</th>
+                                <th className="px-4 py-3 text-center text-xs font-bold tracking-wider text-muted-foreground uppercase">Status</th>
+                                <th className="px-4 py-3 text-center text-xs font-bold tracking-wider text-muted-foreground uppercase">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                            {isLoading ? (
+                                Array.from({ length: 6 }).map((_, i) => (
+                                    <tr key={i} className="animate-pulse">
+                                        {Array.from({ length: 8 }).map((_, j) => (
+                                            <td key={j} className="px-4 py-3"><div className="h-4 rounded bg-muted/60" /></td>
+                                        ))}
+                                    </tr>
+                                ))
+                            ) : vehicles.length === 0 ? (
+                                <tr>
+                                    <td colSpan={8} className="px-4 py-16 text-center">
+                                        <div className="flex flex-col items-center gap-3">
+                                            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-muted/50">
+                                                <Package className="h-7 w-7 text-muted-foreground" />
+                                            </div>
+                                            <p className="font-medium text-muted-foreground">No vehicles found</p>
+                                            <AdminOnly>
+                                                <Link href="/vehicles/new">
+                                                    <Button size="sm" className="bg-gradient-brand text-white">
+                                                        <Plus className="mr-1.5 h-4 w-4" /> Add First Vehicle
+                                                    </Button>
+                                                </Link>
+                                            </AdminOnly>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ) : (
+                                vehicles.map((v) => {
+                                    const isSold = v.dateSold && v.soldPrice;
+                                    const pl = v.profitLoss;
+                                    const isProfit = pl >= 0;
+
+                                    return (
+                                        <tr key={v._id} className="hover:bg-muted/20 transition-colors group">
+                                            <td className="px-4 py-3">
+                                                <VehicleTypeIcon type={v.vehicleType} className="text-muted-foreground" />
+                                            </td>
+                                            <td className="px-4 py-3 text-muted-foreground text-xs">{formatDate(v.datePurchased)}</td>
+                                            <td className="px-4 py-3">
+                                                <div>
+                                                    <p className="font-semibold text-foreground">{v.make} {v.model}</p>
+                                                    <p className="text-[11px] text-muted-foreground">{v.vehicleId}{v.purchasedFrom ? ` • from ${v.purchasedFrom}` : ""}</p>
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span className="rounded-md bg-muted/50 px-2 py-0.5 text-xs font-mono font-semibold text-foreground">
+                                                    {v.registrationNo}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-semibold text-foreground">
+                                                {formatINR(v.totalInvestment)}
+                                            </td>
+                                            <td className="px-4 py-3 text-right">
+                                                {isSold ? (
+                                                    <span className={cn("flex items-center justify-end gap-1 font-semibold text-xs", isProfit ? "text-emerald-400" : "text-red-400")}>
+                                                        {isProfit ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                                                        {isProfit ? "+" : ""}{formatINR(pl)}
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-xs text-muted-foreground italic">Unrealized</span>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                                <div className="flex flex-col items-center gap-1">
+                                                    <VehicleStatusBadge status={v.status} />
+                                                    {v.saleStatus && <VehicleStatusBadge saleStatus={v.saleStatus} />}
+                                                    {v.isExchange && (
+                                                        <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                                                            <ArrowLeftRight className="h-2.5 w-2.5" />Sold via Exchange
+                                                        </span>
+                                                    )}
+                                                    {v.isFromExchange && (
+                                                        <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                                            <ArrowLeftRight className="h-2.5 w-2.5" />From Exchange
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                                <Link href={`/vehicles/${v._id}`}>
+                                                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <Eye className="h-4 w-4" />
+                                                    </Button>
+                                                </Link>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                {/* Pagination */}
+                {meta && (
+                    <TablePagination
+                        page={page}
+                        totalPages={meta.totalPages}
+                        total={meta.total}
+                        limit={PAGE_SIZE}
+                        onPageChange={setPage}
+                        isLoading={isLoading}
+                    />
+                )}
+            </div>
+        </div>
+    );
+};
+
+export default VehicleList;
