@@ -3,7 +3,7 @@ import { getClientSession, setClientSession, clearClientSession } from "@/lib/au
 import { useSessionStore } from "@/stores/session";
 
 const apiClient = axios.create({
-    baseURL: process.env.NEXT_PUBLIC_API_URL || "https://vehicleshop-hk7l.onrender.com/api/v1",
+    baseURL: process.env.NEXT_PUBLIC_API_URL || "https://vehiclebook-demo.onrender.com/api/v1",
     withCredentials: true,
     timeout: 15000,
 });
