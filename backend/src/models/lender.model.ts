@@ -46,6 +46,5 @@ const lenderSchema = new Schema<ILender>(
 );
 
 lenderSchema.index({ name: 1 });
-lenderSchema.index({ isActive: 1 });
 
 export const Lender = mongoose.model<ILender>("Lender", lenderSchema);

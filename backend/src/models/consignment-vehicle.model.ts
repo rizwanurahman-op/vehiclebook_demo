@@ -288,7 +288,6 @@ const ConsignmentVehicleSchema = new Schema<IConsignmentVehicle>({
 
 // ── Indexes ───────────────────────────────────────────────────────
 ConsignmentVehicleSchema.index({ vehicleType: 1 });
-ConsignmentVehicleSchema.index({ status: 1 });
 ConsignmentVehicleSchema.index({ nocStatus: 1 });
 ConsignmentVehicleSchema.index({ settlementStatus: 1 });
 ConsignmentVehicleSchema.index({ dateReceived: -1 });

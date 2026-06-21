@@ -36,6 +36,7 @@ const attemptConnect = async (): Promise<void> => {
                 // Recommended production timeouts
                 serverSelectionTimeoutMS: 10000,
                 connectTimeoutMS: 10000,
+                autoSelectFamily: false,
             });
             console.log("✅ MongoDB connected successfully");
             hasConnectedOnce = true;
