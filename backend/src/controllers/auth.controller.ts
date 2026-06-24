@@ -4,32 +4,60 @@ import { apiResponse } from "../utils/api-response";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { env } from "../config/env";
 
-// Must match exactly when clearing — browser won't clear cookie unless options align
-const REFRESH_COOKIE_OPTIONS = {
-    httpOnly: true,
-    secure: env.NODE_ENV === "production",
-    // In production: strict prevents all cross-site cookie sending (CSRF mitigation)
-    // In development: lax is needed to allow frontend :3000 → backend :5001 cross-origin requests
-    sameSite: (env.NODE_ENV === "production" ? "strict" : "lax") as "strict" | "lax",
+const IS_PROD = env.NODE_ENV === "production";
+
+// ─── Cookie option factories ──────────────────────────────────────────────────
+// Must match exactly when clearing — browser won't clear cookie unless options align.
+
+// Access token: httpOnly so JavaScript cannot read/steal it (XSS mitigation).
+// Kept short-lived (matches JWT_ACCESS_EXPIRY) — renewed silently by /auth/refresh.
+const accessCookieOptions = (maxAge: number) => ({
+    httpOnly: true,                                                // ← XSS protection: JS cannot read this
+    secure: IS_PROD,                                               // HTTPS-only in production
+    sameSite: (IS_PROD ? "strict" : "lax") as "strict" | "lax",  // CSRF mitigation
     path: "/",
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days — matches JWT_REFRESH_EXPIRY
-};
+    maxAge,
+});
+
+// Refresh token: 1-day, httpOnly, used only on /auth/refresh.
+// maxAge is set via REFRESH_TOKEN_MAX_AGE_MS (defined below) — must match JWT_REFRESH_EXPIRY=1d.
+const makeRefreshCookieOptions = () => ({
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: (IS_PROD ? "strict" : "lax") as "strict" | "lax",
+    path: "/",
+    maxAge: REFRESH_TOKEN_MAX_AGE_MS, // 1 day — matches JWT_REFRESH_EXPIRY
+});
 
 const CLEAR_COOKIE_OPTIONS = {
     httpOnly: true,
-    secure: env.NODE_ENV === "production",
-    sameSite: (env.NODE_ENV === "production" ? "strict" : "lax") as "strict" | "lax",
+    secure: IS_PROD,
+    sameSite: (IS_PROD ? "strict" : "lax") as "strict" | "lax",
     path: "/",
+};
+
+// Access token cookie TTL: 15m = 900_000 ms (matches JWT_ACCESS_EXPIRY=15m).
+// If the env value is changed, this must be updated to match.
+const ACCESS_TOKEN_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes
+
+// Refresh token cookie TTL: 1d = 86_400_000 ms (matches JWT_REFRESH_EXPIRY=1d).
+// SINGLE SOURCE OF TRUTH — change this value if JWT_REFRESH_EXPIRY changes.
+const REFRESH_TOKEN_MAX_AGE_MS = 1 * 24 * 60 * 60 * 1000; // 1 day
+
+/** Set both tokens as httpOnly cookies and return user info + accessToken in body. */
+const setAuthCookies = (res: Response, accessToken: string, refreshToken: string) => {
+    res.cookie("vb_access_token", accessToken, accessCookieOptions(ACCESS_TOKEN_MAX_AGE_MS));
+    res.cookie("refreshToken", refreshToken, makeRefreshCookieOptions());
 };
 
 export const register = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { user, tokens } = await authService.register(req.body);
-        res.cookie("refreshToken", tokens.refreshToken, { ...REFRESH_COOKIE_OPTIONS });
+        setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
         res.status(201).json(
             apiResponse(201, "Admin registered successfully", {
                 user: { id: user._id, username: user.username, email: user.email, role: user.role },
-                accessToken: tokens.accessToken,
+                accessToken: tokens.accessToken, // still returned in body for Zustand in-memory store
             })
         );
     } catch (error) {
@@ -40,11 +68,11 @@ export const register = async (req: Request, res: Response, next: NextFunction):
 export const login = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { user, tokens } = await authService.login(req.body);
-        res.cookie("refreshToken", tokens.refreshToken, { ...REFRESH_COOKIE_OPTIONS });
+        setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
         res.status(200).json(
             apiResponse(200, "Logged in successfully", {
                 user: { id: user._id, username: user.username, email: user.email, role: user.role },
-                accessToken: tokens.accessToken,
+                accessToken: tokens.accessToken, // still returned in body for Zustand in-memory store
             })
         );
     } catch (error) {
@@ -59,8 +87,12 @@ export const refresh = async (req: Request, res: Response, next: NextFunction): 
             res.status(401).json({ success: false, statusCode: 401, message: "No refresh token" });
             return;
         }
-        const accessToken = await authService.refreshAccessToken(refreshToken);
-        res.status(200).json(apiResponse(200, "Token refreshed", { accessToken }));
+        // refreshAccessToken now returns a full TokenPair (rotation: new refresh token each time)
+        const tokens = await authService.refreshAccessToken(refreshToken);
+        // Rotate BOTH cookies — old refresh token is invalidated in the DB by the service
+        res.cookie("vb_access_token", tokens.accessToken, accessCookieOptions(ACCESS_TOKEN_MAX_AGE_MS));
+        res.cookie("refreshToken", tokens.refreshToken, makeRefreshCookieOptions());
+        res.status(200).json(apiResponse(200, "Token refreshed", { accessToken: tokens.accessToken }));
     } catch (error) {
         next(error);
     }
@@ -75,7 +107,8 @@ export const logout = async (req: Request, res: Response, next: NextFunction): P
             // Best-effort: revoke the refresh token in DB (ignore errors — always clear cookie)
             await authService.logoutByRefreshToken(refreshToken).catch(() => null);
         }
-        // Clear with EXACT same options the cookie was set with, otherwise browser ignores it
+        // Clear with EXACT same options the cookies were set with, otherwise browser ignores it
+        res.clearCookie("vb_access_token", CLEAR_COOKIE_OPTIONS);
         res.clearCookie("refreshToken", CLEAR_COOKIE_OPTIONS);
         res.status(200).json(apiResponse(200, "Logged out successfully"));
     } catch (error) {

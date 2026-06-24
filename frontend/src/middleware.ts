@@ -41,6 +41,37 @@ function isSafeInternalPath(path: string): boolean {
     );
 }
 
+/**
+ * Build the Content-Security-Policy header value.
+ *
+ * For static page optimization in Next.js, we must allow 'unsafe-inline'
+ * in script-src, otherwise pre-rendered static pages will fail to load scripts.
+ * In development, 'unsafe-eval' is also needed for hot-reload (HMR).
+ */
+function buildCsp(isDev: boolean): string {
+    const apiOrigin = process.env.NEXT_PUBLIC_API_URL
+        ? (() => { try { return new URL(process.env.NEXT_PUBLIC_API_URL).origin; } catch { return ""; } })()
+        : "";
+
+    const scriptSrc = isDev
+        ? `'self' 'unsafe-inline' 'unsafe-eval'`
+        : `'self' 'unsafe-inline'`;
+
+    const directives = [
+        "default-src 'self'",
+        `script-src ${scriptSrc}`,
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "img-src 'self' data: blob:",
+        `connect-src 'self'${apiOrigin ? ` ${apiOrigin}` : ""}`,
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+    ];
+
+    return directives.join("; ");
+}
+
 export function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
     const token = request.cookies.get("vb_access_token")?.value;
@@ -56,8 +87,10 @@ export function middleware(request: NextRequest) {
     if (!isPublicPath && !token) {
         const loginUrl = new URL("/auth/login", request.url);
         // Only set callbackUrl for safe internal paths (prevents open redirect)
+        // Include query string so filters/params are restored after login
         if (isSafeInternalPath(pathname)) {
-            loginUrl.searchParams.set("callbackUrl", pathname);
+            const fullPath = pathname + (request.nextUrl.search || "");
+            loginUrl.searchParams.set("callbackUrl", fullPath);
         }
         return NextResponse.redirect(loginUrl);
     }
@@ -71,7 +104,14 @@ export function middleware(request: NextRequest) {
         }
     }
 
-    return NextResponse.next();
+    // ── Content-Security-Policy ──────────────────────────────────────────────
+    const isDev = process.env.NODE_ENV !== "production";
+    const csp = buildCsp(isDev);
+
+    const response = NextResponse.next();
+    response.headers.set("Content-Security-Policy", csp);
+
+    return response;
 }
 
 export const config = {

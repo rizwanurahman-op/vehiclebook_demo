@@ -1,5 +1,5 @@
 import axios from "axios";
-import { getClientSession, setClientSession, clearClientSession } from "@/lib/auth";
+import { setClientSession, clearClientSession } from "@/lib/auth";
 import { useSessionStore } from "@/stores/session";
 
 const apiClient = axios.create({
@@ -8,10 +8,12 @@ const apiClient = axios.create({
     timeout: 15000,
 });
 
-// ─── Request Interceptor — attach access token ─────────────────
+// ─── Request Interceptor — attach access token from Zustand memory ──────────
+// The vb_access_token is httpOnly — JS cannot read it from cookies.
+// Instead we read it from the Zustand store (held in memory, not persisted).
 apiClient.interceptors.request.use(
     config => {
-        const token = getClientSession();
+        const token = useSessionStore.getState().accessToken;
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
@@ -20,7 +22,7 @@ apiClient.interceptors.request.use(
     error => Promise.reject(error)
 );
 
-// ─── Response Interceptor — auto-refresh on 401 ───────────────
+// ─── Response Interceptor — auto-refresh on 401 ───────────────────────────
 let isRefreshing = false;
 let failedQueue: Array<{ resolve: (value: unknown) => void; reject: (reason: unknown) => void }> = [];
 
@@ -35,10 +37,10 @@ const processQueue = (error: unknown, token: string | null = null) => {
     failedQueue = [];
 };
 
-// Force a full logout: clear cookie + clear Zustand session store
-const forceLogout = () => {
-    clearClientSession();
-    // Access the store outside React — this is safe with Zustand's getState()
+// Force a full logout: clear expiry marker + clear Zustand session store.
+// The httpOnly cookie is cleared by the backend /auth/logout endpoint.
+const forceLogout = async () => {
+    await clearClientSession();
     useSessionStore.getState().clearSession();
     if (typeof window !== "undefined") {
         window.location.href = "/auth/login";
@@ -72,10 +74,13 @@ apiClient.interceptors.response.use(
             isRefreshing = true;
 
             try {
+                // withCredentials sends the httpOnly refreshToken cookie automatically
                 const { data } = await apiClient.post("/auth/refresh");
                 const newToken = data?.data?.accessToken;
                 if (newToken) {
-                    setClientSession(newToken);
+                    // Update in-memory store and record expiry for proactive refresh
+                    useSessionStore.getState().setSession(useSessionStore.getState().user!, newToken);
+                    await setClientSession(newToken); // records expiry in localStorage
                     apiClient.defaults.headers.common.Authorization = `Bearer ${newToken}`;
                     originalRequest.headers.Authorization = `Bearer ${newToken}`;
                     processQueue(null, newToken);
@@ -83,10 +88,10 @@ apiClient.interceptors.response.use(
                 }
                 // Refresh succeeded but returned no token — force logout
                 processQueue(new Error("No token in refresh response"), null);
-                forceLogout();
+                await forceLogout();
             } catch (refreshError) {
                 processQueue(refreshError, null);
-                forceLogout();
+                await forceLogout();
                 return Promise.reject(refreshError);
             } finally {
                 isRefreshing = false;

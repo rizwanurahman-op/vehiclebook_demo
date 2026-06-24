@@ -39,12 +39,13 @@ const lenderSchema = new Schema<ILender>(
         isActive: {
             type: Boolean,
             default: true,
-            index: true,
+            // index declared below via lenderSchema.index({ isActive: 1 })
         },
     },
     { timestamps: true }
 );
 
 lenderSchema.index({ name: 1 });
+lenderSchema.index({ isActive: 1 });
 
 export const Lender = mongoose.model<ILender>("Lender", lenderSchema);

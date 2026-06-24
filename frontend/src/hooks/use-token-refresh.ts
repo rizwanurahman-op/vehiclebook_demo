@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { useSessionStore } from "@stores/session";
-import { setClientSession, clearClientSession, msUntilTokenExpiry, getClientSession } from "@/lib/auth";
+import { setClientSession, clearClientSession, msUntilTokenExpiry } from "@/lib/auth";
 import apiClient from "@config/axios";
 
 /**
@@ -20,14 +20,30 @@ import apiClient from "@config/axios";
  *
  * All refreshes call POST /auth/refresh which reads the httpOnly refreshToken cookie.
  * If the refresh itself fails (refresh token expired/revoked), forceLogout is called.
+ *
+ * NOTE: The vb_access_token cookie is httpOnly — JS cannot read it.
+ * We detect "session is active" by checking the Zustand in-memory accessToken
+ * or the expiry timestamp stored in localStorage.
  */
 export function useTokenRefresh() {
-    const clearSession = useSessionStore(s => s.clearSession);
+    const { clearSession, setSession } = useSessionStore();
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isRefreshingRef = useRef(false);
 
-    const forceLogout = useCallback(() => {
-        clearClientSession();
+    // Use refs to read the latest values without causing effect re-runs
+    const userRef = useRef(useSessionStore.getState().user);
+    const accessTokenRef = useRef(useSessionStore.getState().accessToken);
+
+    // Keep refs in sync with store changes (without adding to useCallback deps)
+    useEffect(() => {
+        return useSessionStore.subscribe((state) => {
+            userRef.current = state.user;
+            accessTokenRef.current = state.accessToken;
+        });
+    }, []);
+
+    const forceLogout = useCallback(async () => {
+        await clearClientSession();
         clearSession();
         window.location.href = "/auth/login";
     }, [clearSession]);
@@ -36,30 +52,36 @@ export function useTokenRefresh() {
         if (isRefreshingRef.current) return;
         isRefreshingRef.current = true;
         try {
+            // withCredentials sends the httpOnly refreshToken cookie automatically
             const { data } = await apiClient.post<{ data: { accessToken: string } }>("/auth/refresh");
             const newToken = data?.data?.accessToken;
             if (newToken) {
-                setClientSession(newToken);
-                // Also keep the axios default header in sync
+                // Store new token in Zustand memory and record expiry for next schedule
+                const currentUser = userRef.current;
+                if (currentUser) {
+                    setSession(currentUser, newToken);
+                }
+                await setClientSession(newToken); // records expiry in localStorage
+                // Keep axios default header in sync
                 apiClient.defaults.headers.common.Authorization = `Bearer ${newToken}`;
             } else {
-                forceLogout();
+                await forceLogout();
             }
         } catch {
             // Refresh token is expired or revoked — the user must log in again
-            forceLogout();
+            await forceLogout();
         } finally {
             isRefreshingRef.current = false;
         }
-    }, [forceLogout]);
+    }, [forceLogout, setSession]);
 
     /** Schedule a refresh to fire 2 minutes before the token expires. */
     const scheduleRefresh = useCallback(() => {
         if (timerRef.current) clearTimeout(timerRef.current);
 
         const msLeft = msUntilTokenExpiry();
-        // If already expired or no cookie, try immediately
-        if (msLeft <= 0 || !getClientSession()) {
+        // If already expired or no in-memory token, try immediately
+        if (msLeft <= 0 || !accessTokenRef.current) {
             silentRefresh().then(scheduleRefresh);
             return;
         }
@@ -71,7 +93,7 @@ export function useTokenRefresh() {
         timerRef.current = setTimeout(() => {
             silentRefresh().then(scheduleRefresh);
         }, delay);
-    }, [silentRefresh]);
+    }, [silentRefresh]); // accessToken removed — read via ref to avoid re-render loop
 
     useEffect(() => {
         // 1. Schedule a refresh for ~2 min before expiry on mount
@@ -80,7 +102,7 @@ export function useTokenRefresh() {
         // 2. On tab focus: if token has < 5 min left (or is missing), refresh now
         const FOCUS_THRESHOLD_MS = 5 * 60 * 1000;
         const handleFocus = () => {
-            if (msUntilTokenExpiry() < FOCUS_THRESHOLD_MS || !getClientSession()) {
+            if (msUntilTokenExpiry() < FOCUS_THRESHOLD_MS || !accessTokenRef.current) {
                 silentRefresh().then(scheduleRefresh);
             }
         };
@@ -91,5 +113,5 @@ export function useTokenRefresh() {
             window.removeEventListener("focus", handleFocus);
             if (timerRef.current) clearTimeout(timerRef.current);
         };
-    }, [scheduleRefresh, silentRefresh]);
+    }, [scheduleRefresh, silentRefresh]); // accessToken removed from deps — stops infinite loop
 }
