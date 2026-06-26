@@ -1,0 +1,27 @@
+# Dependency directories
+node_modules/
+
+# Build outputs
+dist/
+.next/
+out/
+build/
+tsconfig.tsbuildinfo
+
+# Local env files
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Backups and temporary files
+backups/
+backend/backups/
+backend/src/scripts/
+
+# System files
+.DS_Store

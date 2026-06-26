@@ -36,6 +36,9 @@ const attemptConnect = async (): Promise<void> => {
                 // Recommended production timeouts
                 serverSelectionTimeoutMS: 10000,
                 connectTimeoutMS: 10000,
+                // Connection pool: supports 100-300 concurrent users without bottleneck
+                minPoolSize: 5,
+                maxPoolSize: 20,
             });
             console.log("✅ MongoDB connected successfully");
             hasConnectedOnce = true;

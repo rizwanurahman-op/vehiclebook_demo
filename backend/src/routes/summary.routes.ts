@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { getLenderSummary, getSingleLenderSummary, getDashboardStats, exportSummary } from "../controllers/summary.controller";
-import { authenticate } from "../middleware/auth.middleware";
+import { authenticate, resolveAdminScope } from "../middleware/auth.middleware";
 import { asyncHandler } from "../utils/async-handler";
 import { exportLimiter } from "../middleware/rate-limit.middleware";
 
 const router = Router();
 router.use(authenticate);
+router.use(resolveAdminScope);
 
 router.get("/dashboard",           asyncHandler(getDashboardStats));
 router.get("/lenders",             asyncHandler(getLenderSummary));

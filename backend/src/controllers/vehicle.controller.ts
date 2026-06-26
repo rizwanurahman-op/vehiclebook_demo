@@ -1,5 +1,6 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import { z } from "zod";
+import { AuthRequest } from "../middleware/auth.middleware";
 import * as vs from "../services/vehicle.service";
 import {
     createVehicleSchema, updateVehicleSchema,
@@ -16,178 +17,177 @@ const updateNocStatusSchema = z.object({
 });
 
 // ── Vehicle CRUD ─────────────────────────────────────────────────
-export const createVehicle = async (req: Request, res: Response): Promise<void> => {
+export const createVehicle = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = createVehicleSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
         return;
     }
-    const vehicle = await vs.createVehicle(parsed.data as never);
+    const vehicle = await vs.createVehicle(parsed.data as never, req.adminId!);
     res.status(201).json({ success: true, statusCode: 201, message: "Vehicle created successfully", data: vehicle });
 };
 
-export const getVehicles = async (req: Request, res: Response): Promise<void> => {
+export const getVehicles = async (req: AuthRequest, res: Response): Promise<void> => {
     const { vehicleType, status, saleStatus, fundingSource, isFromExchange, dateFrom, dateTo } = req.query as Record<string, string>;
-    // Sanitize & clamp page/limit to prevent runaway queries
     const page  = Math.max(1, parseInt((req.query.page  as string) ?? "1",  10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "20", 10) || 20));
-    // Limit search string length to prevent expensive regex/text queries
     const search = ((req.query.search as string) ?? "").slice(0, 100) || undefined;
-    const result = await vs.getVehicles({ vehicleType, status, saleStatus, fundingSource, isFromExchange, search, dateFrom, dateTo, page, limit });
+    const result = await vs.getVehicles({ vehicleType, status, saleStatus, fundingSource, isFromExchange, search, dateFrom, dateTo, page, limit }, req.adminId!);
     res.json({ success: true, statusCode: 200, message: "Vehicles fetched", data: result });
 };
 
-export const getVehicle = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await vs.getVehicleById(req.params.id as string);
+export const getVehicle = async (req: AuthRequest, res: Response): Promise<void> => {
+    const vehicle = await vs.getVehicleById(req.params.id as string, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Vehicle fetched", data: vehicle });
 };
 
-export const updateVehicle = async (req: Request, res: Response): Promise<void> => {
+export const updateVehicle = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = updateVehicleSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
         return;
     }
-    const vehicle = await vs.updateVehicle(req.params.id as string, parsed.data as never);
+    const vehicle = await vs.updateVehicle(req.params.id as string, parsed.data as never, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Vehicle updated", data: vehicle });
 };
 
-export const deleteVehicle = async (req: Request, res: Response): Promise<void> => {
-    const ok = await vs.deleteVehicle(req.params.id as string);
+export const deleteVehicle = async (req: AuthRequest, res: Response): Promise<void> => {
+    const ok = await vs.deleteVehicle(req.params.id as string, req.adminId!);
     if (!ok) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Vehicle deleted" });
 };
 
-export const getVehicleStats = async (req: Request, res: Response): Promise<void> => {
+export const getVehicleStats = async (req: AuthRequest, res: Response): Promise<void> => {
     const { vehicleType, dateFrom, dateTo, status, isFromExchange, search } = req.query as Record<string, string>;
-    const stats = await vs.getVehicleStats({ vehicleType, dateFrom, dateTo, status, isFromExchange, search });
+    const stats = await vs.getVehicleStats({ vehicleType, dateFrom, dateTo, status, isFromExchange, search }, req.adminId!);
     res.json({ success: true, statusCode: 200, message: "Stats fetched", data: stats });
 };
 
 // ── Sale ─────────────────────────────────────────────────────────
-export const recordSale = async (req: Request, res: Response): Promise<void> => {
+export const recordSale = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = recordSaleSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
         return;
     }
-    const vehicle = await vs.recordSale(req.params.id as string, parsed.data);
+    const vehicle = await vs.recordSale(req.params.id as string, parsed.data, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Sale recorded", data: vehicle });
 };
 
-export const updateSale = async (req: Request, res: Response): Promise<void> => {
+export const updateSale = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = updateSaleSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
         return;
     }
-    const vehicle = await vs.recordSale(req.params.id as string, parsed.data as never);
+    const vehicle = await vs.recordSale(req.params.id as string, parsed.data as never, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Sale updated", data: vehicle });
 };
 
-export const undoSale = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await vs.undoSale(req.params.id as string);
+export const undoSale = async (req: AuthRequest, res: Response): Promise<void> => {
+    const vehicle = await vs.undoSale(req.params.id as string, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Sale undone", data: vehicle });
 };
 
-export const updateNocStatus = async (req: Request, res: Response): Promise<void> => {
+export const updateNocStatus = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = updateNocStatusSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
         return;
     }
-    const vehicle = await vs.updateNocStatus(req.params.id as string, parsed.data.nocStatus);
+    const vehicle = await vs.updateNocStatus(req.params.id as string, parsed.data.nocStatus, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "NOC status updated", data: vehicle });
 };
 
 // ── Purchase Payments ─────────────────────────────────────────────
-export const addPurchasePayment = async (req: Request, res: Response): Promise<void> => {
+export const addPurchasePayment = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = addPurchasePaymentSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
         return;
     }
-    const vehicle = await vs.addPurchasePayment(req.params.id as string, parsed.data);
+    const vehicle = await vs.addPurchasePayment(req.params.id as string, parsed.data, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.status(201).json({ success: true, statusCode: 201, message: "Purchase payment recorded", data: vehicle });
 };
 
-export const deletePurchasePayment = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await vs.deletePurchasePayment(req.params.id as string, req.params.paymentId as string);
+export const deletePurchasePayment = async (req: AuthRequest, res: Response): Promise<void> => {
+    const vehicle = await vs.deletePurchasePayment(req.params.id as string, req.params.paymentId as string, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Payment deleted", data: vehicle });
 };
 
 // ── Sale Payments ─────────────────────────────────────────────────
-export const addSalePayment = async (req: Request, res: Response): Promise<void> => {
+export const addSalePayment = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = addSalePaymentSchema.safeParse(req.body);
     if (!parsed.success) {
-        res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
+        const errors = parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message }));
+        res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors });
         return;
     }
-    const result = await vs.addSalePayment(req.params.id as string, parsed.data);
+    const result = await vs.addSalePayment(req.params.id as string, parsed.data, req.adminId!);
     if (!result) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.status(201).json({ success: true, statusCode: 201, message: "Sale payment recorded", data: result.vehicle, exchangeVehicle: result.exchangeVehicle });
 };
 
-export const deleteSalePayment = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await vs.deleteSalePayment(req.params.id as string, req.params.paymentId as string);
+export const deleteSalePayment = async (req: AuthRequest, res: Response): Promise<void> => {
+    const vehicle = await vs.deleteSalePayment(req.params.id as string, req.params.paymentId as string, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Payment deleted", data: vehicle });
 };
 
 // ── Costs ─────────────────────────────────────────────────────────
-export const updateCosts = async (req: Request, res: Response): Promise<void> => {
+export const updateCosts = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = updateCostsSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
         return;
     }
-    const vehicle = await vs.updateCosts(req.params.id as string, parsed.data as never);
+    const vehicle = await vs.updateCosts(req.params.id as string, parsed.data as never, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Costs updated", data: vehicle });
 };
 
-export const recalcCosts = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await vs.recalcCosts(req.params.id as string);
+export const recalcCosts = async (req: AuthRequest, res: Response): Promise<void> => {
+    const vehicle = await vs.recalcCosts(req.params.id as string, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Costs recalculated", data: vehicle });
 };
 
-export const addCostBreakdownItem = async (req: Request, res: Response): Promise<void> => {
+export const addCostBreakdownItem = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = addCostBreakdownItemSchema.safeParse(req.body);
     if (!parsed.success) {
         res.status(400).json({ success: false, statusCode: 400, message: "Validation failed", errors: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })) });
         return;
     }
     const { category, ...item } = parsed.data;
-    const vehicle = await vs.addCostBreakdownItem(req.params.id as string, category, item);
+    const vehicle = await vs.addCostBreakdownItem(req.params.id as string, category, item, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Vehicle not found" }); return; }
     res.status(201).json({ success: true, statusCode: 201, message: "Cost item added", data: vehicle });
 };
 
-export const deleteCostBreakdownItem = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await vs.deleteCostBreakdownItem(req.params.id as string, req.params.itemId as string);
+export const deleteCostBreakdownItem = async (req: AuthRequest, res: Response): Promise<void> => {
+    const vehicle = await vs.deleteCostBreakdownItem(req.params.id as string, req.params.itemId as string, req.adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Cost item deleted", data: vehicle });
 };
 
 // ── Reports ───────────────────────────────────────────────────────
-export const getProfitLossReport = async (req: Request, res: Response): Promise<void> => {
+export const getProfitLossReport = async (req: AuthRequest, res: Response): Promise<void> => {
     const { vehicleType, dateFrom, dateTo } = req.query as Record<string, string>;
-    const report = await vs.getProfitLossReport(vehicleType, dateFrom, dateTo);
+    const report = await vs.getProfitLossReport(vehicleType, dateFrom, dateTo, req.adminId!);
     res.json({ success: true, statusCode: 200, message: "P&L report fetched", data: report });
 };
 
-export const exportProfitLoss = async (req: Request, res: Response): Promise<void> => {
+export const exportProfitLoss = async (req: AuthRequest, res: Response): Promise<void> => {
     const { vehicleType, dateFrom, dateTo, format = "csv" } = req.query as Record<string, string>;
-    const vehicles = await vs.getProfitLossReport(vehicleType, dateFrom, dateTo);
+    const vehicles = await vs.getProfitLossReport(vehicleType, dateFrom, dateTo, req.adminId!);
     const timestamp = new Date().toISOString().slice(0, 10);
 
     if (format === "csv") {
@@ -240,32 +240,32 @@ export const exportProfitLoss = async (req: Request, res: Response): Promise<voi
     res.status(400).json({ success: false, message: "format must be 'csv' or 'pdf'" });
 };
 
-export const getMonthlyReport = async (_req: Request, res: Response): Promise<void> => {
-    const report = await vs.getMonthlyReport();
+export const getMonthlyReport = async (req: AuthRequest, res: Response): Promise<void> => {
+    const report = await vs.getMonthlyReport(req.adminId!);
     res.json({ success: true, statusCode: 200, message: "Monthly report fetched", data: report });
 };
 
-export const getPendingReport = async (req: Request, res: Response): Promise<void> => {
+export const getPendingReport = async (req: AuthRequest, res: Response): Promise<void> => {
     const { vehicleType, dateFrom, dateTo } = req.query as Record<string, string>;
-    const report = await vs.getPendingReport({ vehicleType, dateFrom, dateTo });
+    const report = await vs.getPendingReport({ vehicleType, dateFrom, dateTo, adminId: req.adminId! });
     res.json({ success: true, statusCode: 200, message: "Pending report fetched", data: report });
 };
 
-export const getInventoryReport = async (_req: Request, res: Response): Promise<void> => {
-    const report = await vs.getInventoryReport();
+export const getInventoryReport = async (req: AuthRequest, res: Response): Promise<void> => {
+    const report = await vs.getInventoryReport(req.adminId!);
     res.json({ success: true, statusCode: 200, message: "Inventory report fetched", data: report });
 };
 
-export const getPurchaseRegister = async (req: Request, res: Response): Promise<void> => {
+export const getPurchaseRegister = async (req: AuthRequest, res: Response): Promise<void> => {
     const { vehicleType, paymentStatus, dateFrom, dateTo } = req.query as Record<string, string>;
     const page  = Math.max(1, parseInt((req.query.page  as string) ?? "1",  10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "20", 10) || 20));
     const search = ((req.query.search as string) ?? "").slice(0, 100) || undefined;
-    const result = await vs.getPurchaseRegister({ vehicleType, paymentStatus, search, dateFrom, dateTo, page, limit });
+    const result = await vs.getPurchaseRegister({ vehicleType, paymentStatus, search, dateFrom, dateTo, page, limit, adminId: req.adminId! });
     res.json({ success: true, statusCode: 200, message: "Purchase register fetched", data: result });
 };
 
-export const exportPurchases = async (req: Request, res: Response): Promise<void> => {
+export const exportPurchases = async (req: AuthRequest, res: Response): Promise<void> => {
     const { vehicleType, paymentStatus, search, dateFrom, dateTo, format } = req.query as Record<string, string>;
 
     if (format !== "csv" && format !== "pdf") {
@@ -276,30 +276,31 @@ export const exportPurchases = async (req: Request, res: Response): Promise<void
     const { exportPurchasesCSV, exportPurchasesPDF } = await import("../services/purchase_export");
     const timestamp = new Date().toISOString().slice(0, 10);
     const filename = `purchase_register_${timestamp}`;
+    const adminId = req.adminId!;
 
     if (format === "csv") {
-        const csv = await exportPurchasesCSV({ vehicleType, paymentStatus, search, dateFrom, dateTo });
+        const csv = await exportPurchasesCSV({ vehicleType, paymentStatus, search, dateFrom, dateTo }, adminId);
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}.csv"`);
         res.send("\uFEFF" + csv);
         return;
     }
 
-    const pdfBuffer = await exportPurchasesPDF({ vehicleType, paymentStatus, search, dateFrom, dateTo });
+    const pdfBuffer = await exportPurchasesPDF({ vehicleType, paymentStatus, search, dateFrom, dateTo }, adminId);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}.pdf"`);
     res.send(pdfBuffer);
 };
 
 // ── Exchange Vehicle Lookup ─────────────────────────────────────────
-export const lookupVehicles = async (req: Request, res: Response): Promise<void> => {
+export const lookupVehicles = async (req: AuthRequest, res: Response): Promise<void> => {
     const { q } = req.query as Record<string, string>;
-    const results = await vs.lookupVehiclesByRegNo(q || "");
+    const results = await vs.lookupVehiclesByRegNo(q || "", req.adminId!);
     res.json({ success: true, statusCode: 200, message: "Lookup results", data: results });
 };
 
 // ── Export ─────────────────────────────────────────────────────────
-export const exportVehicles = async (req: Request, res: Response): Promise<void> => {
+export const exportVehicles = async (req: AuthRequest, res: Response): Promise<void> => {
     const { vehicleType, status, isFromExchange, search, dateFrom, dateTo, format } = req.query as Record<string, string>;
 
     if (format !== "csv" && format !== "pdf") {
@@ -310,9 +311,10 @@ export const exportVehicles = async (req: Request, res: Response): Promise<void>
     const query = { vehicleType, status, isFromExchange, search, dateFrom, dateTo, format } as Parameters<typeof vs.exportVehiclesCSV>[0];
     const timestamp = new Date().toISOString().slice(0, 10);
     const filename = `vehicles_${timestamp}`;
+    const adminId = req.adminId!;
 
     if (format === "csv") {
-        const csv = await vs.exportVehiclesCSV(query);
+        const csv = await vs.exportVehiclesCSV(query, adminId);
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}.csv"`);
         res.send("\uFEFF" + csv); // BOM prefix for Excel UTF-8 compatibility
@@ -320,14 +322,14 @@ export const exportVehicles = async (req: Request, res: Response): Promise<void>
     }
 
     // PDF
-    const pdfBuffer = await vs.exportVehiclesPDF(query);
+    const pdfBuffer = await vs.exportVehiclesPDF(query, adminId);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}.pdf"`);
     res.send(pdfBuffer);
 };
 
 // ── Single Vehicle Export ──────────────────────────────────────────
-export const exportVehicleDetail = async (req: Request, res: Response): Promise<void> => {
+export const exportVehicleDetail = async (req: AuthRequest, res: Response): Promise<void> => {
     const { format } = req.query as Record<string, string>;
     const id = req.params.id as string;
 

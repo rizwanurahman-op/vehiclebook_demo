@@ -5,7 +5,10 @@ const paymentModes = ["Cash", "Online", "Cheque", "UPI"] as const;
 export const createInvestmentSchema = z.object({
     date: z.string().min(1, "Date is required"),
     lender: z.string().min(1, "Lender is required"),
-    amountReceived: z.number().positive("Amount must be positive"),
+    amountReceived: z.preprocess(
+        (v) => (v === null || v === undefined || v === "" ? 0 : Number(v)),
+        z.number().min(0, { message: "Amount must be 0 or greater" })
+    ),
     mode: z.enum(paymentModes),
     referenceNo: z.string().optional(),
     notes: z.string().optional(),
@@ -13,7 +16,10 @@ export const createInvestmentSchema = z.object({
 
 export const updateInvestmentSchema = z.object({
     date: z.string().optional(),
-    amountReceived: z.number().positive().optional(),
+    amountReceived: z.preprocess(
+        (v) => (v === null || v === undefined || v === "" ? undefined : Number(v)),
+        z.number().min(0).optional()
+    ),
     mode: z.enum(paymentModes).optional(),
     referenceNo: z.string().optional(),
     notes: z.string().optional(),

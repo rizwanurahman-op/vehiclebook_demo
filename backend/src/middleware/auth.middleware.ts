@@ -1,13 +1,16 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env";
-import { UnauthorizedError } from "../utils/api-error";
+import { UnauthorizedError, ForbiddenError } from "../utils/api-error";
 
 export interface AuthRequest extends Request {
     user?: {
         userId: string;
         role: string;
+        adminId?: string; // effective adminId decoded from JWT (set for viewers)
     };
+    /** Resolved admin scope — used by all data controllers */
+    adminId?: string;
 }
 
 /**
@@ -41,7 +44,11 @@ export const authenticate = (req: AuthRequest, _res: Response, next: NextFunctio
     }
 
     try {
-        const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as { userId: string; role: string };
+        const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as {
+            userId: string;
+            role: string;
+            adminId?: string;
+        };
         req.user = decoded;
         next();
     } catch {
@@ -49,9 +56,64 @@ export const authenticate = (req: AuthRequest, _res: Response, next: NextFunctio
     }
 };
 
+/**
+ * Checks that the requesting user is an admin (not viewer or superadmin-only route).
+ */
 export const isAdmin = (req: AuthRequest, _res: Response, next: NextFunction): void => {
     if (req.user?.role !== "admin") {
         throw new UnauthorizedError("Admin access required");
     }
+    next();
+};
+
+/**
+ * Checks that the requesting user is a superadmin.
+ */
+export const isSuperAdmin = (req: AuthRequest, _res: Response, next: NextFunction): void => {
+    if (req.user?.role !== "superadmin") {
+        throw new ForbiddenError("SuperAdmin access required");
+    }
+    next();
+};
+
+/**
+ * Allows both admin and superadmin roles.
+ */
+export const isAdminOrSuperAdmin = (req: AuthRequest, _res: Response, next: NextFunction): void => {
+    const role = req.user?.role;
+    if (role !== "admin" && role !== "superadmin") {
+        throw new UnauthorizedError("Admin access required");
+    }
+    next();
+};
+
+/**
+ * Resolves the effective adminId for data scoping and attaches it to req.adminId.
+ *
+ * Resolution logic:
+ *   - superadmin:  reads adminId from query/param (for superadmin-scoped APIs)
+ *   - admin:       req.user.userId IS the adminId
+ *   - viewer:      req.user.adminId (embedded in JWT at login time)
+ *
+ * Must be called AFTER authenticate().
+ * Throws 400 if superadmin does not supply an adminId via query/param.
+ */
+export const resolveAdminScope = (req: AuthRequest, _res: Response, next: NextFunction): void => {
+    const { role, userId, adminId: jwtAdminId } = req.user!;
+
+    if (role === "admin") {
+        req.adminId = userId;
+    } else if (role === "viewer") {
+        if (!jwtAdminId) throw new UnauthorizedError("Viewer token missing adminId — please log in again");
+        req.adminId = jwtAdminId;
+    } else if (role === "superadmin") {
+        // Superadmin can pass adminId as query param or route param for scoped calls
+        const scopedAdminId = (req.query.adminId as string) || (req.params.adminId as string);
+        if (!scopedAdminId) throw new ForbiddenError("SuperAdmin must supply adminId to scope this request");
+        req.adminId = scopedAdminId;
+    } else {
+        throw new UnauthorizedError("Unknown role");
+    }
+
     next();
 };

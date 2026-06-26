@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, model } from "mongoose";
 
 export interface IVehicle extends Omit<Document, 'model'> {
+    adminId: mongoose.Types.ObjectId;
     vehicleId: string;
     vehicleType: "two_wheeler" | "four_wheeler";
     make: string;
@@ -205,6 +206,7 @@ const VehicleSchema = new Schema<IVehicle>({
     remarks: String,
     notes: String,
     isActive: { type: Boolean, default: true }, // index via compound: isActive_1_status_1_dateSold_-1
+    adminId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
 }, { timestamps: true });
 
 // Indexes
@@ -228,6 +230,9 @@ VehicleSchema.index(
 VehicleSchema.index({ totalInvestment: -1 });                 // sort/filter by investment in reports
 VehicleSchema.index({ profitLoss: -1 });                      // P&L report sorting
 VehicleSchema.index({ isActive: 1, status: 1, dateSold: -1 }); // compound for common report filter combo
+// Per-admin compound indexes for multi-tenant isolation
+VehicleSchema.index({ adminId: 1, status: 1, createdAt: -1 });
+VehicleSchema.index({ adminId: 1, vehicleType: 1, status: 1 });
 
 // Pre-save hook: auto-calculations
 VehicleSchema.pre("save", function (next) {

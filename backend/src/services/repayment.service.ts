@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Repayment, IRepayment } from "../models/repayment.model";
 import { Lender } from "../models/lender.model";
 import counterService from "./counter.service";
@@ -34,36 +35,35 @@ interface ListRepaymentsQuery {
     dateTo?: string;
 }
 
-const create = async (data: CreateRepaymentInput): Promise<IRepayment> => {
-    const lender = await Lender.findById(data.lender);
+const create = async (data: CreateRepaymentInput, adminId: string): Promise<IRepayment> => {
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    const lender = await Lender.findOne({ _id: data.lender, adminId: adminOid });
     if (!lender) throw new NotFoundError("Lender");
 
-    const repaymentId = await counterService.getNextId("repayment");
+    const repaymentId = await counterService.getNextId("repayment", adminId);
     const repayment = await Repayment.create({
-        ...data,
-        repaymentId,
-        date: new Date(data.date),
+        ...data, repaymentId, date: new Date(data.date), adminId: adminOid,
     });
     return repayment.populate("lender", "lenderId name phone");
 };
 
-const list = async (query: ListRepaymentsQuery) => {
+const list = async (query: ListRepaymentsQuery, adminId: string) => {
     const { page, limit, skip } = getPagination(query);
-    const filter: Record<string, unknown> = {};
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    const filter: Record<string, unknown> = { adminId: adminOid };
 
-    if (query.lenderId)      filter.lender        = query.lenderId;
-    if (query.mode)          filter.mode          = query.mode;
+    if (query.lenderId) filter.lender = query.lenderId;
+    if (query.mode) filter.mode = query.mode;
     if (query.repaymentType) filter.repaymentType = query.repaymentType;
     if (query.dateFrom || query.dateTo) {
         const dateFilter: Record<string, Date> = {};
         if (query.dateFrom) dateFilter.$gte = new Date(query.dateFrom);
-        if (query.dateTo)   dateFilter.$lte = new Date(new Date(query.dateTo).setHours(23, 59, 59, 999));
+        if (query.dateTo) dateFilter.$lte = new Date(new Date(query.dateTo).setHours(23, 59, 59, 999));
         filter.date = dateFilter;
     }
     if (query.search) {
         const matchingLenders = await Lender.find(
-            { name: { $regex: query.search, $options: "i" } },
-            { _id: 1 }
+            { adminId: adminOid, name: { $regex: query.search, $options: "i" } }, { _id: 1 }
         ).lean();
         const lenderIds = matchingLenders.map((l) => l._id);
         filter.$or = [
@@ -73,27 +73,23 @@ const list = async (query: ListRepaymentsQuery) => {
     }
 
     const [repayments, total] = await Promise.all([
-        Repayment.find(filter)
-            .populate("lender", "lenderId name phone")
-            .sort({ date: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean(),
+        Repayment.find(filter).populate("lender", "lenderId name phone").sort({ date: -1 }).skip(skip).limit(limit).lean(),
         Repayment.countDocuments(filter),
     ]);
 
     return { data: repayments, meta: buildPaginationMeta(total, page, limit) };
 };
 
-const getById = async (id: string): Promise<IRepayment> => {
-    const rep = await Repayment.findById(id).populate("lender", "lenderId name phone");
+const getById = async (id: string, adminId: string): Promise<IRepayment> => {
+    const rep = await Repayment.findOne({ _id: id, adminId: new mongoose.Types.ObjectId(adminId) })
+        .populate("lender", "lenderId name phone");
     if (!rep) throw new NotFoundError("Repayment");
     return rep;
 };
 
-const update = async (id: string, data: UpdateRepaymentInput): Promise<IRepayment> => {
-    const rep = await Repayment.findByIdAndUpdate(
-        id,
+const update = async (id: string, data: UpdateRepaymentInput, adminId: string): Promise<IRepayment> => {
+    const rep = await Repayment.findOneAndUpdate(
+        { _id: id, adminId: new mongoose.Types.ObjectId(adminId) },
         { ...data, ...(data.date ? { date: new Date(data.date) } : {}) },
         { new: true, runValidators: true }
     ).populate("lender", "lenderId name phone");
@@ -101,36 +97,37 @@ const update = async (id: string, data: UpdateRepaymentInput): Promise<IRepaymen
     return rep;
 };
 
-const remove = async (id: string): Promise<void> => {
-    const rep = await Repayment.findByIdAndDelete(id);
+const remove = async (id: string, adminId: string): Promise<void> => {
+    const rep = await Repayment.findOneAndDelete({ _id: id, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!rep) throw new NotFoundError("Repayment");
 };
 
-const getByLender = async (lenderId: string, query: { page?: string; limit?: string }) => {
+const getByLender = async (lenderId: string, adminId: string, query: { page?: string; limit?: string }) => {
     const { page, limit, skip } = getPagination(query);
+    const filter = { lender: lenderId, adminId: new mongoose.Types.ObjectId(adminId) };
     const [repayments, total] = await Promise.all([
-        Repayment.find({ lender: lenderId }).sort({ date: -1 }).skip(skip).limit(limit).lean(),
-        Repayment.countDocuments({ lender: lenderId }),
+        Repayment.find(filter).sort({ date: -1 }).skip(skip).limit(limit).lean(),
+        Repayment.countDocuments(filter),
     ]);
     return { data: repayments, meta: buildPaginationMeta(total, page, limit) };
 };
 
-const exportAll = async (query: { lenderId?: string; mode?: string; repaymentType?: string; dateFrom?: string; dateTo?: string; search?: string } = {}) => {
-    const filter: Record<string, unknown> = {};
-    if (query.lenderId)      filter.lender        = query.lenderId;
-    if (query.mode)          filter.mode          = query.mode;
+const exportAll = async (query: { lenderId?: string; mode?: string; repaymentType?: string; dateFrom?: string; dateTo?: string; search?: string } = {}, adminId: string) => {
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    const filter: Record<string, unknown> = { adminId: adminOid };
+    if (query.lenderId) filter.lender = query.lenderId;
+    if (query.mode) filter.mode = query.mode;
     if (query.repaymentType) filter.repaymentType = query.repaymentType;
     if (query.dateFrom || query.dateTo) {
         const df: Record<string, Date> = {};
         if (query.dateFrom) df.$gte = new Date(query.dateFrom);
-        if (query.dateTo)   df.$lte = new Date(new Date(query.dateTo).setHours(23, 59, 59, 999));
+        if (query.dateTo) df.$lte = new Date(new Date(query.dateTo).setHours(23, 59, 59, 999));
         filter.date = df;
     }
 
     const repayments = await Repayment.find(filter)
         .populate<{ lender: { lenderId: string; name: string } }>("lender", "lenderId name")
-        .sort({ date: -1 })
-        .lean();
+        .sort({ date: -1 }).lean();
 
     const searchLower = query.search?.toLowerCase();
     const filtered = searchLower
@@ -142,37 +139,27 @@ const exportAll = async (query: { lenderId?: string; mode?: string; repaymentTyp
         : repayments;
 
     return filtered.map(rep => ({
-        repaymentId:   rep.repaymentId,
-        date:          rep.date,
-        lender:        rep.lender,
-        amountPaid:    rep.amountPaid,
-        mode:          rep.mode,
+        repaymentId: rep.repaymentId, date: rep.date, lender: rep.lender,
+        amountPaid: rep.amountPaid, mode: rep.mode,
         repaymentType: rep.repaymentType ?? "Principal",
-        referenceNo:   rep.referenceNo || "",
-        remarks:       rep.remarks || "",
-        // CSV-friendly aliases
-        "Repayment ID":      rep.repaymentId,
-        "Date":              new Date(rep.date).toLocaleDateString("en-IN"),
-        "Lender ID":         rep.lender?.lenderId || "",
-        "Lender Name":       rep.lender?.name || "",
-        "Type":              rep.repaymentType ?? "Principal",
-        "Amount Paid (Rs.)": rep.amountPaid,
-        "Mode":              rep.mode,
-        "Reference No":      rep.referenceNo || "",
-        "Remarks":           rep.remarks || "",
+        referenceNo: rep.referenceNo || "", remarks: rep.remarks || "",
+        "Repayment ID": rep.repaymentId, "Date": new Date(rep.date).toLocaleDateString("en-IN"),
+        "Lender ID": rep.lender?.lenderId || "", "Lender Name": rep.lender?.name || "",
+        "Type": rep.repaymentType ?? "Principal", "Amount Paid (Rs.)": rep.amountPaid,
+        "Mode": rep.mode, "Reference No": rep.referenceNo || "", "Remarks": rep.remarks || "",
     }));
 };
 
-const getStats = async (query: { lenderId?: string; mode?: string; repaymentType?: string; dateFrom?: string; dateTo?: string; search?: string } = {}) => {
-    const data = await exportAll(query);
-    const totalPaid      = data.reduce((s, r) => s + r.amountPaid, 0);
+const getStats = async (query: { lenderId?: string; mode?: string; repaymentType?: string; dateFrom?: string; dateTo?: string; search?: string } = {}, adminId: string) => {
+    const data = await exportAll(query, adminId);
+    const totalPaid = data.reduce((s, r) => s + r.amountPaid, 0);
     const totalPrincipal = data.filter(r => r.repaymentType === "Principal").reduce((s, r) => s + r.amountPaid, 0);
-    const totalProfit    = data.filter(r => r.repaymentType === "Profit").reduce((s, r) => s + r.amountPaid, 0);
+    const totalProfit = data.filter(r => r.repaymentType === "Profit").reduce((s, r) => s + r.amountPaid, 0);
     const avgAmount = data.length > 0 ? Math.round(totalPaid / data.length) : 0;
     const modeMap = new Map<string, number>();
     data.forEach(r => modeMap.set(r.mode, (modeMap.get(r.mode) ?? 0) + r.amountPaid));
     const byMode = Object.fromEntries(modeMap);
-    const uniqueLenders = new Set(data.map(r => typeof r.lender === "object" ? (r.lender as {name?:string})?.name : r.lender)).size;
+    const uniqueLenders = new Set(data.map(r => typeof r.lender === "object" ? (r.lender as { name?: string })?.name : r.lender)).size;
     return { totalRepayments: data.length, totalPaid, totalPrincipal, totalProfit, avgAmount, byMode, uniqueLenders };
 };
 

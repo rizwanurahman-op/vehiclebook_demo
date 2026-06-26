@@ -7,6 +7,7 @@ export interface IRetentionPolicy {
 }
 
 export interface IBackupSettings extends Document {
+    adminId: mongoose.Types.ObjectId;
     dailyEnabled: boolean;
     dailyTime: string;
     weeklyEnabled: boolean;
@@ -32,6 +33,7 @@ const retentionPolicySchema = new Schema<IRetentionPolicy>(
 
 const backupSettingsSchema = new Schema<IBackupSettings>(
     {
+        adminId: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
         dailyEnabled: {
             type: Boolean,
             default: false,
@@ -87,12 +89,17 @@ const backupSettingsSchema = new Schema<IBackupSettings>(
 export const BackupSettings = mongoose.model<IBackupSettings>("BackupSettings", backupSettingsSchema);
 
 /**
- * Get the singleton BackupSettings document (creates one with defaults if missing).
+ * Get the BackupSettings document for a specific admin (creates one with defaults if missing).
+ * Always requires an adminId — each admin has their own isolated settings document.
  */
-export const getBackupSettings = async (): Promise<IBackupSettings> => {
-    let settings = await BackupSettings.findOne();
+export const getBackupSettings = async (adminId?: string | null): Promise<IBackupSettings> => {
+    if (!adminId) {
+        throw new Error("getBackupSettings requires an adminId");
+    }
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    let settings = await BackupSettings.findOne({ adminId: adminOid });
     if (!settings) {
-        settings = await BackupSettings.create({});
+        settings = await BackupSettings.create({ adminId: adminOid });
     }
     return settings;
 };

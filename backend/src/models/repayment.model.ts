@@ -4,6 +4,7 @@ export type PaymentMode = "Cash" | "Online" | "Cheque" | "UPI";
 export type RepaymentType = "Principal" | "Profit";
 
 export interface IRepayment extends Document {
+    adminId: mongoose.Types.ObjectId;
     repaymentId: string;
     date: Date;
     lender: mongoose.Types.ObjectId;
@@ -59,11 +60,13 @@ const repaymentSchema = new Schema<IRepayment>(
             type: String,
             trim: true,
         },
+        adminId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     },
     { timestamps: true }
 );
 
 repaymentSchema.index({ lender: 1, date: -1 });
 repaymentSchema.index({ date: -1 });
+repaymentSchema.index({ adminId: 1, date: -1 });
 
 export const Repayment = mongoose.model<IRepayment>("Repayment", repaymentSchema);

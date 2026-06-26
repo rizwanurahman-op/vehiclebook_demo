@@ -10,6 +10,7 @@ import cors from "cors";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import mongoSanitize from "express-mongo-sanitize";
+import compression from "compression";
 
 import { env } from "./config/env";
 import { connectDB } from "./config/db";
@@ -31,6 +32,7 @@ import exchangeRoutes from "./routes/exchange.routes";
 import salesRoutes from "./routes/sales.routes";
 import userRoutes from "./routes/user.routes";
 import backupRoutes from "./routes/backup.routes";
+import superAdminRoutes from "./routes/superadmin.routes";
 
 const app = express();
 
@@ -84,6 +86,11 @@ app.use(cookieParser());
 // ─── Logging ──────────────────────────────────────────────────
 app.use(requestLogger);
 
+// ─── Compression ─────────────────────────────────────────
+// Gzip compress API responses — significantly reduces payload for large lists
+// (vehicle/lender/consignment) which are the heaviest endpoints for 100+ users.
+app.use(compression());
+
 // ─── Rate Limiting ─────────────────────────────────────────────
 app.use("/api", generalLimiter);
 
@@ -105,6 +112,7 @@ app.use("/api/v1/vehicle-owners", vehicleOwnerRoutes);
 app.use("/api/v1/exchanges", exchangeRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/backups", backupRoutes);
+app.use("/api/v1/superadmin", superAdminRoutes);
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use("*", (_req, res) => {

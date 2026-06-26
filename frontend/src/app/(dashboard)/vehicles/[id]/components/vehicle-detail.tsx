@@ -1298,6 +1298,14 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
         ? Math.min(100, Math.max(0, (vehicle.receivedAmount / vehicle.soldPrice) * 100))
         : 0;
 
+    // Exchange over-received: when exchange value > sold price
+    const exchangePayments = vehicle.salePayments.filter(p => p.type === "exchange");
+    const totalExchangeValue = exchangePayments.reduce((s, p) => s + p.amount, 0);
+    const cashPayments = vehicle.salePayments.filter(p => p.type !== "exchange");
+    const totalCashReceived = cashPayments.reduce((s, p) => s + p.amount, 0);
+    const isOverReceived = isSold && vehicle.soldPrice != null && vehicle.receivedAmount > vehicle.soldPrice;
+    const excessAmount = isOverReceived ? vehicle.receivedAmount - vehicle.soldPrice! : 0;
+
     const hasExchangeActivity = vehicle.isExchange || vehicle.isFromExchange ||
         vehicle.salePayments.some(p => p.type === "exchange");
 
@@ -1517,7 +1525,9 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                         onClick={handleSaleClick}
                         className={cn(
                             "p-5 flex flex-col gap-2.5 transition-all duration-300 hover:bg-muted/20 cursor-pointer relative group bg-gradient-to-br from-card to-background/50",
-                            !isSold ? "hover:border-l-4 hover:border-l-muted" : salePct === 100 ? "hover:border-l-4 hover:border-l-emerald-500" : "hover:border-l-4 hover:border-l-blue-500"
+                            !isSold ? "hover:border-l-4 hover:border-l-muted" :
+                            isOverReceived ? "hover:border-l-4 hover:border-l-amber-500" :
+                            salePct === 100 ? "hover:border-l-4 hover:border-l-emerald-500" : "hover:border-l-4 hover:border-l-blue-500"
                         )}
                     >
                         <div className="flex justify-between items-center text-xs">
@@ -1525,17 +1535,24 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                 <DollarSign className="h-3.5 w-3.5 text-success shrink-0" />
                                 Sale Payment Progress
                             </span>
-                            <span className="font-bold text-foreground bg-muted/60 px-2 py-0.5 rounded-md border border-border/40 font-mono text-[10px]">
-                                {isSold ? `${salePct.toFixed(0)}%` : "N/A"}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                                {isOverReceived && (
+                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                                        Over-received
+                                    </span>
+                                )}
+                                <span className="font-bold text-foreground bg-muted/60 px-2 py-0.5 rounded-md border border-border/40 font-mono text-[10px]">
+                                    {isSold ? `${salePct.toFixed(0)}%` : "N/A"}
+                                </span>
+                            </div>
                         </div>
 
                         <div className="flex justify-between items-baseline mt-1">
                             <div className="text-xl sm:text-2xl font-bold text-foreground">
                                 {isSold ? (
                                     <>
-                                        {formatCurrency(vehicle.receivedAmount)}
-                                        <span className="text-xs font-normal text-muted-foreground ml-1">received of {formatCurrency(vehicle.soldPrice!)}</span>
+                                        {formatCurrency(vehicle.soldPrice!)}
+                                        <span className="text-xs font-normal text-muted-foreground ml-1">sold price</span>
                                     </>
                                 ) : (
                                     <span className="text-muted-foreground text-lg sm:text-xl font-semibold">Not Sold Yet</span>
@@ -1552,9 +1569,11 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                     "h-full rounded-full transition-all duration-1000 ease-out shadow-sm",
                                     !isSold
                                         ? "bg-muted/30"
-                                        : salePct === 100
-                                            ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
-                                            : "bg-gradient-to-r from-blue-500 to-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]"
+                                        : isOverReceived
+                                            ? "bg-gradient-to-r from-amber-500 to-orange-400 shadow-[0_0_8px_rgba(245,158,11,0.4)]"
+                                            : salePct === 100
+                                                ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                                                : "bg-gradient-to-r from-blue-500 to-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]"
                                 )}
                                 style={{ width: `${animateProgress ? (isSold ? salePct : 0) : 0}%` }}
                             />
@@ -1562,7 +1581,12 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
 
                         <div className="flex items-center justify-between mt-0.5">
                             {isSold ? (
-                                vehicle.balanceAmount > 0 ? (
+                                isOverReceived ? (
+                                    <p className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
+                                        <span className="animate-pulse h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                                        {formatCurrency(vehicle.receivedAmount)} received · {formatCurrency(excessAmount)} excess exchange value
+                                    </p>
+                                ) : vehicle.balanceAmount > 0 ? (
                                     <p className="text-[10px] text-red-400 font-medium flex items-center gap-1">
                                         <span className="animate-pulse h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
                                         {formatCurrency(vehicle.balanceAmount)} outstanding balance from buyer
@@ -1789,9 +1813,9 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                                     {[
                                         { label: "Sold Price", value: formatCurrency(vehicle.soldPrice!), color: "text-foreground" },
-                                        { label: "Received", value: formatCurrency(vehicle.receivedAmount), color: "text-emerald-400" },
+                                        { label: "Cash Received", value: formatCurrency(totalCashReceived), color: "text-emerald-400" },
+                                        { label: "Exchange Value", value: totalExchangeValue > 0 ? formatCurrency(totalExchangeValue) : "—", color: totalExchangeValue > 0 ? "text-orange-400" : "text-muted-foreground" },
                                         { label: "Balance", value: formatCurrency(vehicle.balanceAmount), color: vehicle.balanceAmount > 0 ? "text-red-400" : "text-emerald-400" },
-                                        { label: "Profit/Loss", value: formatCurrency(Math.abs(pl)), color: isProfit ? "text-emerald-400" : "text-red-400" },
                                     ].map((s) => (
                                         <div key={s.label}>
                                             <p className="text-xs text-muted-foreground">{s.label}</p>
@@ -1799,6 +1823,36 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                         </div>
                                     ))}
                                 </div>
+                                {isOverReceived && (
+                                    <div className="mt-3 pt-3 border-t border-amber-500/20 rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2.5 flex items-start gap-2">
+                                        <span className="text-amber-400 text-sm shrink-0">⚠️</span>
+                                        <div>
+                                            <p className="text-xs font-bold text-amber-400">Exchange Value Exceeds Sold Price</p>
+                                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                                                The exchange vehicle was valued at <strong className="text-orange-400">{formatCurrency(totalExchangeValue)}</strong>, which is{" "}
+                                                <strong className="text-amber-400">{formatCurrency(excessAmount)}</strong> more than the sold price of{" "}
+                                                <strong className="text-foreground">{formatCurrency(vehicle.soldPrice!)}</strong>.
+                                                The sale is fully settled. The excess exchange value ({formatCurrency(excessAmount)}) represents an over-trade — the buyer received more trade-in credit than the vehicle&apos;s sale price. Record any cash difference paid to buyer separately if applicable.
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+                                {!isOverReceived && (
+                                    <div className="mt-3 pt-3 border-t border-border flex items-center justify-between text-sm">
+                                        <span className="text-muted-foreground">Profit/Loss</span>
+                                        <span className={cn("font-bold", isProfit ? "text-emerald-400" : "text-red-400")}>
+                                            {isProfit ? "+" : "-"}{formatCurrency(Math.abs(pl))}
+                                        </span>
+                                    </div>
+                                )}
+                                {isOverReceived && (
+                                    <div className="mt-2 flex items-center justify-between text-sm">
+                                        <span className="text-muted-foreground">Profit/Loss (based on sold price)</span>
+                                        <span className={cn("font-bold", isProfit ? "text-emerald-400" : "text-red-400")}>
+                                            {isProfit ? "+" : "-"}{formatCurrency(Math.abs(pl))}
+                                        </span>
+                                    </div>
+                                )}
                             </div>
 
                             {/* ── Finance Disbursement Card ── */}
@@ -1880,6 +1934,11 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                 <AdminOnly>
                                     {vehicle.balanceAmount > 0 ? (
                                         <AddSalePaymentDialog vehicle={vehicle} />
+                                    ) : isOverReceived ? (
+                                        <div className="flex items-center gap-1.5 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
+                                            <span className="text-sm">⚠️</span>
+                                            Over-received · {formatCurrency(excessAmount)} excess
+                                        </div>
                                     ) : (
                                         <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
                                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd" /></svg>
@@ -2002,15 +2061,34 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                             <div className="p-5 space-y-5">
                                 {vehicle.soldPrice && (
                                     <div className="space-y-2">
+                                        {/* Over-received warning banner */}
+                                        {isOverReceived && (
+                                            <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4 flex items-start gap-3">
+                                                <span className="text-lg shrink-0">⚠️</span>
+                                                <div>
+                                                    <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-1">Exchange Value Exceeds Sold Price</p>
+                                                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                                        The exchange vehicle was valued at <strong className="text-orange-400">{formatCurrency(totalExchangeValue)}</strong>, which is{" "}
+                                                        <strong className="text-amber-400">{formatCurrency(excessAmount)} more</strong> than the sold price of{" "}
+                                                        <strong className="text-foreground">{formatCurrency(vehicle.soldPrice)}</strong>.
+                                                        This is an <strong className="text-amber-300">over-trade</strong> — the buyer received more trade-in credit than the vehicle&apos;s price.
+                                                        The sale is treated as fully settled. If any cash was paid back to the buyer, record it separately.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        )}
                                         <div className="flex justify-between text-sm">
                                             <span className="text-muted-foreground">Total Sold Price</span>
                                             <span className="font-bold text-foreground">{formatCurrency(vehicle.soldPrice)}</span>
                                         </div>
                                         {vehicle.salePayments.filter(p => p.type === "exchange").map(ep => (
-                                            <div key={ep._id} className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4">
+                                            <div key={ep._id} className={cn("rounded-xl border p-4", ep.amount > vehicle.soldPrice! ? "border-amber-500/30 bg-amber-500/5" : "border-orange-500/20 bg-orange-500/5")}>
                                                 <div className="flex items-center gap-2 mb-3">
                                                     <ArrowLeftRight className="h-3.5 w-3.5 text-orange-400" />
                                                     <p className="text-xs font-bold text-orange-400 uppercase tracking-widest">Exchange Vehicle</p>
+                                                    {ep.amount > vehicle.soldPrice! && (
+                                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25">Over-traded</span>
+                                                    )}
                                                     <p className="text-[10px] text-muted-foreground ml-auto">{formatDate(ep.date)}</p>
                                                 </div>
                                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
@@ -2024,7 +2102,14 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                                     </div>
                                                     <div>
                                                         <p className="text-[11px] text-muted-foreground mb-0.5">Exchange Value</p>
-                                                        <p className="font-bold text-orange-400">{formatCurrency(ep.amount)}</p>
+                                                        <p className={cn("font-bold", ep.amount > vehicle.soldPrice! ? "text-amber-400" : "text-orange-400")}>
+                                                            {formatCurrency(ep.amount)}
+                                                            {ep.amount > vehicle.soldPrice! && (
+                                                                <span className="ml-1.5 text-[10px] text-amber-400/70 font-normal">
+                                                                    ({formatCurrency(ep.amount - vehicle.soldPrice!)} over sold price)
+                                                                </span>
+                                                            )}
+                                                        </p>
                                                     </div>
                                                     {ep.exchangeDetails && (
                                                         <div>
@@ -2063,19 +2148,47 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                                 ))
                                             )}
                                         </div>
-                                        <div className="flex justify-between items-center pt-2 border-t-2 border-border font-bold text-sm">
-                                            <span className="text-foreground">Remaining Balance</span>
-                                            <span className={vehicle.balanceAmount > 0 ? "text-red-400" : "text-emerald-400"}>
-                                                {formatCurrency(vehicle.balanceAmount)}
-                                                {vehicle.balanceAmount <= 0 && <span className="ml-2 text-[11px]">✓ Fully settled</span>}
-                                            </span>
+                                        {/* Settlement summary row */}
+                                        <div className="space-y-1.5 pt-2 border-t-2 border-border">
+                                            <div className="flex justify-between items-center text-sm">
+                                                <span className="text-muted-foreground">Total Exchange Value</span>
+                                                <span className={cn("font-semibold", isOverReceived ? "text-amber-400" : "text-orange-400")}>{formatCurrency(totalExchangeValue)}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center text-sm">
+                                                <span className="text-muted-foreground">Total Cash Received</span>
+                                                <span className="font-semibold text-emerald-400">{formatCurrency(totalCashReceived)}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center font-bold text-sm border-t border-border pt-1.5">
+                                                <span className="text-foreground">{isOverReceived ? "Settlement Status" : "Remaining Balance"}</span>
+                                                <span className={isOverReceived ? "text-amber-400" : vehicle.balanceAmount > 0 ? "text-red-400" : "text-emerald-400"}>
+                                                    {isOverReceived ? (
+                                                        <span className="flex items-center gap-1">
+                                                            <span>✓ Settled</span>
+                                                            <span className="text-[10px] font-normal text-amber-400/70">(+{formatCurrency(excessAmount)} excess)</span>
+                                                        </span>
+                                                    ) : (
+                                                        <span>
+                                                            {formatCurrency(vehicle.balanceAmount)}
+                                                            {vehicle.balanceAmount <= 0 && <span className="ml-2 text-[11px]">✓ Fully settled</span>}
+                                                        </span>
+                                                    )}
+                                                </span>
+                                            </div>
                                         </div>
                                         {vehicle.soldPrice > 0 && (
                                             <div>
                                                 <div className="h-2 bg-muted/40 rounded-full overflow-hidden">
-                                                    <div className="h-full bg-gradient-to-r from-orange-500 to-emerald-500 rounded-full" style={{ width: `${Math.min(100, (vehicle.receivedAmount / vehicle.soldPrice) * 100)}%` }} />
+                                                    <div
+                                                        className={cn("h-full rounded-full", isOverReceived ? "bg-gradient-to-r from-amber-500 to-orange-400" : "bg-gradient-to-r from-orange-500 to-emerald-500")}
+                                                        style={{ width: `${Math.min(100, (vehicle.receivedAmount / vehicle.soldPrice) * 100)}%` }}
+                                                    />
                                                 </div>
-                                                <p className="text-[10px] text-muted-foreground mt-1">{((vehicle.receivedAmount / vehicle.soldPrice) * 100).toFixed(0)}% of total received (exchange + cash)</p>
+                                                <p className="text-[10px] text-muted-foreground mt-1">
+                                                    {isOverReceived
+                                                        ? `100% settled · ${formatCurrency(excessAmount)} over-traded`
+                                                        : `${((vehicle.receivedAmount / vehicle.soldPrice) * 100).toFixed(0)}% of total received (exchange + cash)`
+                                                    }
+                                                </p>
                                             </div>
                                         )}
                                     </div>

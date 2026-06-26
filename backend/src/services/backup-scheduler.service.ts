@@ -1,5 +1,6 @@
 import cron, { ScheduledTask } from "node-cron";
-import { getBackupSettings, IBackupSettings } from "../models/backup-settings.model";
+import mongoose from "mongoose";
+import { BackupSettings, IBackupSettings } from "../models/backup-settings.model";
 import { runBackup, BackupSchedule } from "./backup.service";
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -37,17 +38,18 @@ const stopTask = (key: string): void => {
     }
 };
 
-const startTask = (key: BackupSchedule, cronExpr: string): void => {
-    stopTask(key);
+const startTask = (key: BackupSchedule, cronExpr: string, adminId: string): void => {
+    const taskKey = `${adminId}:${key}`;
+    stopTask(taskKey);
 
-    scheduledTasks[key] = cron.schedule(
+    scheduledTasks[taskKey] = cron.schedule(
         cronExpr,
         async () => {
-            console.log(`⏰ [Scheduler] Running scheduled ${key} backup...`);
+            console.log(`⏰ [Scheduler] Running scheduled ${key} backup for admin ${adminId}...`);
             try {
-                await runBackup(key, null);
+                await runBackup(key, adminId, adminId);
             } catch (err) {
-                console.error(`❌ [Scheduler] Scheduled ${key} backup failed:`, err);
+                console.error(`❌ [Scheduler] Scheduled ${key} backup failed for admin ${adminId}:`, err);
             }
         },
         {
@@ -55,44 +57,49 @@ const startTask = (key: BackupSchedule, cronExpr: string): void => {
         }
     );
 
-    console.log(`🗓️  [Scheduler] Started ${key} backup job: ${cronExpr} (IST)`);
+    console.log(`🗓️  [Scheduler] Started ${key} backup job for admin ${adminId}: ${cronExpr} (IST)`);
 };
 
 // ─── Apply Settings ───────────────────────────────────────────────────────────
 
-export const applyScheduleSettings = (settings: IBackupSettings): void => {
-    // ── Daily ──────────────────────────────────────────────────────────────
+export const applyScheduleSettings = (settings: IBackupSettings, adminId: string): void => {
+    // ── Daily ─────────────────────────────────────────────────────────
     if (settings.dailyEnabled) {
-        startTask("daily", buildDailyCron(settings.dailyTime));
+        startTask("daily", buildDailyCron(settings.dailyTime), adminId);
     } else {
-        stopTask("daily");
+        stopTask(`${adminId}:daily`);
     }
 
-    // ── Weekly ─────────────────────────────────────────────────────────────
+    // ── Weekly ─────────────────────────────────────────────────────
     if (settings.weeklyEnabled) {
-        startTask("weekly", buildWeeklyCron(settings.weeklyTime, settings.weeklyDay));
+        startTask("weekly", buildWeeklyCron(settings.weeklyTime, settings.weeklyDay), adminId);
     } else {
-        stopTask("weekly");
+        stopTask(`${adminId}:weekly`);
     }
 
-    // ── Monthly ────────────────────────────────────────────────────────────
+    // ── Monthly ──────────────────────────────────────────────────
     if (settings.monthlyEnabled) {
-        startTask("monthly", buildMonthlyCron(settings.monthlyTime, settings.monthlyDay));
+        startTask("monthly", buildMonthlyCron(settings.monthlyTime, settings.monthlyDay), adminId);
     } else {
-        stopTask("monthly");
+        stopTask(`${adminId}:monthly`);
     }
 };
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Called once at server startup. Loads current settings and initializes cron jobs.
+ * Called once at server startup. Loads ALL admins' settings and initializes cron jobs per admin.
  */
 export const initializeBackupScheduler = async (): Promise<void> => {
     try {
-        const settings = await getBackupSettings();
-        applyScheduleSettings(settings);
-        console.log("✅ Backup scheduler initialized");
+        const allSettings = await BackupSettings.find({}).lean();
+        for (const settings of allSettings) {
+            const adminId = settings.adminId?.toString();
+            if (adminId) {
+                applyScheduleSettings(settings as unknown as IBackupSettings, adminId);
+            }
+        }
+        console.log(`✅ Backup scheduler initialized for ${allSettings.length} admin(s)`);
     } catch (err) {
         console.error("❌ Failed to initialize backup scheduler:", err);
     }
@@ -100,13 +107,27 @@ export const initializeBackupScheduler = async (): Promise<void> => {
 
 /**
  * Called whenever backup settings are updated via the API.
- * Restarts all cron jobs with the new configuration.
+ * Reloads cron jobs for the specific admin whose settings changed.
  */
-export const reloadScheduler = async (): Promise<void> => {
+export const reloadScheduler = async (adminId?: string): Promise<void> => {
     try {
-        const settings = await getBackupSettings();
-        applyScheduleSettings(settings);
-        console.log("🔄 Backup scheduler reloaded with new settings");
+        if (adminId) {
+            // Reload for a specific admin
+            const settings = await BackupSettings.findOne({ adminId: new mongoose.Types.ObjectId(adminId) });
+            if (settings) {
+                applyScheduleSettings(settings, adminId);
+            }
+        } else {
+            // Reload for ALL admins (fallback)
+            const allSettings = await BackupSettings.find({}).lean();
+            for (const settings of allSettings) {
+                const aid = settings.adminId?.toString();
+                if (aid) {
+                    applyScheduleSettings(settings as unknown as IBackupSettings, aid);
+                }
+            }
+        }
+        console.log("🔄 Backup scheduler reloaded");
     } catch (err) {
         console.error("❌ Failed to reload backup scheduler:", err);
     }

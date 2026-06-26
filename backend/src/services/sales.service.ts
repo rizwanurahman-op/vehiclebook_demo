@@ -49,8 +49,9 @@ interface SalesQuery {
     limit?: number;
 }
 
-export const getSales = async (query: SalesQuery) => {
+export const getSales = async (query: SalesQuery, adminId: string) => {
     const { source, saleStatus, search, dateFrom, dateTo, isExchange, page = 1, limit = 20 } = query;
+    const adminOid = new (await import("mongoose")).Types.ObjectId(adminId);
 
     const records: UnifiedSaleRecord[] = [];
 
@@ -58,6 +59,7 @@ export const getSales = async (query: SalesQuery) => {
     if (!source || source === "vehicle") {
         const vMatch: Record<string, unknown> = {
             isActive: true,
+            adminId: adminOid,
             status: { $in: ["sold", "sold_pending"] },
         };
 
@@ -127,6 +129,7 @@ export const getSales = async (query: SalesQuery) => {
     if (!source || source === "consignment") {
         const cMatch: Record<string, unknown> = {
             isActive: true,
+            adminId: adminOid,
             status: { $in: ["sold", "sold_pending"] },
         };
 

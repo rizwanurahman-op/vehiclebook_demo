@@ -6,14 +6,16 @@ import { apiResponse } from "../utils/api-response";
 
 export const getLenderSummary = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const { data, meta } = await summaryService.getLenderSummary(req.query as Record<string, string>);
+        const adminId = (req as any).adminId!;
+        const { data, meta } = await summaryService.getLenderSummary(req.query as Record<string, string>, adminId);
         res.status(200).json(apiResponse(200, "Lender summary fetched", data, meta));
     } catch (error) { next(error); }
 };
 
 export const getSingleLenderSummary = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const summary = await summaryService.getSingleLenderSummary(req.params.lenderId as string);
+        const adminId = (req as any).adminId!;
+        const summary = await summaryService.getSingleLenderSummary(req.params.lenderId as string, adminId);
         if (!summary) {
             res.status(404).json({ success: false, statusCode: 404, message: "Lender not found" });
             return;
@@ -24,7 +26,8 @@ export const getSingleLenderSummary = async (req: AuthRequest, res: Response, ne
 
 export const getDashboardStats = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const stats = await summaryService.getDashboardStats();
+        const adminId = (req as any).adminId!;
+        const stats = await summaryService.getDashboardStats(adminId);
         res.status(200).json(apiResponse(200, "Dashboard stats fetched", stats));
     } catch (error) { next(error); }
 };
@@ -33,11 +36,12 @@ export const exportSummary = async (req: AuthRequest, res: Response, next: NextF
     try {
         const { format = "csv", status, search, dateFrom, dateTo } = req.query as Record<string, string>;
         const timestamp = new Date().toISOString().slice(0, 10);
+        const adminId = (req as any).adminId!;
         const query = { status, search, dateFrom, dateTo, page: "1", limit: "1000" };
 
         if (format === "pdf") {
             // PDF needs raw camelCase fields (lenderId, totalBorrowed, etc.)
-            const { data } = await summaryService.getLenderSummary(query);
+            const { data } = await summaryService.getLenderSummary(query, adminId);
             const buf = await exportSummaryPDF(data as never[], { status, search, dateFrom, dateTo });
             res.setHeader("Content-Type", "application/pdf");
             res.setHeader("Content-Disposition", `attachment; filename="lender-summary_${timestamp}.pdf"`);
@@ -46,7 +50,7 @@ export const exportSummary = async (req: AuthRequest, res: Response, next: NextF
         }
 
         // CSV uses renamed display-friendly keys
-        const data = await summaryService.exportSummary({ status, search, dateFrom, dateTo });
+        const data = await summaryService.exportSummary({ status, search, dateFrom, dateTo, adminId });
         const esc = (x: unknown) => { const s = String(x ?? ""); return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s; };
         const headers = Object.keys(data[0] || {});
         const csv = [

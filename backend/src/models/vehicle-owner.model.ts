@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, model } from "mongoose";
 
 export interface IVehicleOwner extends Document {
+    adminId: mongoose.Types.ObjectId;
     ownerId: string;
     name: string;
     phone?: string;
@@ -16,6 +17,7 @@ const VehicleOwnerSchema = new Schema<IVehicleOwner>({
     address: { type: String, trim: true },
     remarks: String,
     isActive: { type: Boolean, default: true, index: true },
+    adminId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
 }, { timestamps: true });
 
 VehicleOwnerSchema.index({ name: 1 });

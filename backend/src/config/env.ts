@@ -29,6 +29,11 @@ const envSchema = z.object({
     // Password for ZIP files — anyone who downloads from Telegram needs this to open
     // Generate a strong one: openssl rand -base64 24
     BACKUP_ZIP_PASSWORD: z.string().optional(),
+    // ─── SuperAdmin Seed Credentials ────────────────────────────────────────────
+    // Used ONLY by the seed:superadmin script. Never sent over the wire.
+    SUPERADMIN_USERNAME: z.string().optional(),
+    SUPERADMIN_EMAIL: z.string().optional(),
+    SUPERADMIN_PASSWORD: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

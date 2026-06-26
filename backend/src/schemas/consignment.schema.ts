@@ -83,8 +83,11 @@ export const recordConsignmentSaleSchema = z.object({
 });
 
 export const addBuyerPaymentSchema = z.object({
-    date: z.string().min(1),
-    amount: z.number().min(1, { message: "Amount must be > 0" }),
+    date: z.string().min(1, { message: "Date is required" }),
+    amount: z.preprocess(
+        (v) => (v === null || v === undefined || v === "" ? 0 : Number(v)),
+        z.number().min(0, { message: "Amount must be 0 or greater" })
+    ),
     mode: z.enum(["Cash", "Online", "Cheque", "UPI", "GPay", "Finance", "Bank Transfer"]),
     type: z.enum(["cash", "exchange"]).default("cash"),
     exchangeDetails: z.string().optional(),
@@ -97,11 +100,17 @@ export const addBuyerPaymentSchema = z.object({
     notes: z.string().optional(),
     createExchangeAs: z.enum(["phase2_purchase", "phase3_park_sale", "phase3_finance_sale", "skip"]).optional().default("phase2_purchase"),
     exchangeVehicleType: z.enum(["two_wheeler", "four_wheeler"]).optional(),
+    // Frontend-only toggle — acknowledged by backend and ignored after parsing
+    addToInventory: z.boolean().optional(),
 });
 
+
 export const addPayeePaymentSchema = z.object({
-    date: z.string().min(1),
-    amount: z.number().min(1, { message: "Amount must be > 0" }),
+    date: z.string().min(1, { message: "Date is required" }),
+    amount: z.preprocess(
+        (v) => (v === null || v === undefined || v === "" ? 0 : Number(v)),
+        z.number().min(0, { message: "Amount must be 0 or greater" })
+    ),
     mode: z.enum(["Cash", "Online", "Cheque", "UPI", "Bank Transfer"]),
     notes: z.string().optional(),
     markClosed: z.boolean().optional().default(false),

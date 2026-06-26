@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, model } from "mongoose";
 
 export interface IConsignmentVehicle extends Omit<Document, 'model'> {
+    adminId: mongoose.Types.ObjectId;
     consignmentId: string;
     saleType: "park_sale" | "finance_sale";
     vehicleType: "two_wheeler" | "four_wheeler";
@@ -284,6 +285,7 @@ const ConsignmentVehicleSchema = new Schema<IConsignmentVehicle>({
     remarks: String,
     notes: String,
     isActive: { type: Boolean, default: true }, // index via compound: isActive_1_status_1_dateSold_-1
+    adminId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
 }, { timestamps: true });
 
 // ── Indexes ───────────────────────────────────────────────────────
@@ -301,6 +303,9 @@ ConsignmentVehicleSchema.index({ previousOwner: "text", make: "text", model: "te
 ConsignmentVehicleSchema.index({ totalInvestment: -1 });                  // sort/filter by investment in reports
 ConsignmentVehicleSchema.index({ netProfit: -1 });                        // P&L report sorting
 ConsignmentVehicleSchema.index({ isActive: 1, status: 1, dateSold: -1 }); // compound for common report filter combo
+// Per-admin compound indexes
+ConsignmentVehicleSchema.index({ adminId: 1, status: 1, createdAt: -1 });
+ConsignmentVehicleSchema.index({ adminId: 1, saleType: 1, status: 1 });
 
 // ── Pre-save hook: auto-calculations ─────────────────────────────
 ConsignmentVehicleSchema.pre("save", function (next) {

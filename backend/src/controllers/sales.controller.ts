@@ -11,7 +11,7 @@ export const getSalesRegister = async (req: Request, res: Response): Promise<voi
     const result = await getSales({
         source, saleStatus, search, dateFrom, dateTo, isExchange,
         page, limit,
-    });
+    }, (req as any).adminId!);
 
     res.json({ success: true, statusCode: 200, message: "Sales register fetched", data: result });
 };
@@ -19,14 +19,15 @@ export const getSalesRegister = async (req: Request, res: Response): Promise<voi
 export const exportSalesRegister = async (req: Request, res: Response): Promise<void> => {
     const { source, saleStatus, search, dateFrom, dateTo, isExchange, format = "csv" } = req.query as Record<string, string>;
     const q = { source, saleStatus, search, dateFrom, dateTo, isExchange };
+    const adminId = (req as any).adminId!;
 
     if (format === "pdf") {
-        const buf = await exportSalesPDF(q);
+        const buf = await exportSalesPDF(q, adminId);
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", `attachment; filename="sales_register_${new Date().toISOString().slice(0, 10)}.pdf"`);
         res.send(buf);
     } else {
-        const csv = await exportSalesCSV(q);
+        const csv = await exportSalesCSV(q, adminId);
         res.setHeader("Content-Type", "text/csv");
         res.setHeader("Content-Disposition", `attachment; filename="sales_register_${new Date().toISOString().slice(0, 10)}.csv"`);
         res.send(csv);

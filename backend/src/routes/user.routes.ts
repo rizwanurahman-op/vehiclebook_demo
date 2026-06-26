@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate, isAdmin } from "../middleware/auth.middleware";
+import { authenticate, isAdmin, resolveAdminScope } from "../middleware/auth.middleware";
 import { asyncHandler } from "../utils/async-handler";
 import { validate } from "../middleware/validate.middleware";
 import { createViewerSchema, updateUserSchema } from "../schemas/user.schema";

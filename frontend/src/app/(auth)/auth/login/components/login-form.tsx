@@ -41,8 +41,13 @@ const LoginForm = () => {
             await setClientSession(accessToken);
             setSession(user, accessToken);
             toast.success("Welcome back!", { id: toastId, description: `Logged in as ${user.username}` });
-            const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
-            router.push(callbackUrl);
+            // Superadmin always goes to the superadmin portal
+            if (user.role === "superadmin") {
+                router.push("/superadmin/dashboard");
+            } else {
+                const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+                router.push(callbackUrl);
+            }
             router.refresh();
         } catch (error: unknown) {
             const axiosErr = error as AxiosError;

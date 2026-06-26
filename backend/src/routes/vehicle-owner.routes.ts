@@ -1,10 +1,11 @@
 import { Router } from "express";
-import { authenticate, isAdmin } from "../middleware/auth.middleware";
+import { authenticate, isAdmin, resolveAdminScope } from "../middleware/auth.middleware";
 import { asyncHandler } from "../utils/async-handler";
 import * as voc from "../controllers/vehicle-owner.controller";
 
 const router = Router();
 router.use(authenticate);
+router.use(resolveAdminScope);
 
 router.get("/", asyncHandler(voc.getVehicleOwners));
 router.post("/", isAdmin, asyncHandler(voc.createVehicleOwner));

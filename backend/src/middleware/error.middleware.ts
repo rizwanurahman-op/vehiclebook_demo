@@ -35,6 +35,7 @@ export const errorHandler = (err: unknown, _req: Request, res: Response, _next: 
 
     // Mongoose validation errors
     if (typeof err === "object" && err !== null && "name" in err && (err as { name: string }).name === "ValidationError") {
+        console.error("[Mongoose ValidationError]:", (err as Error).message);
         res.status(400).json({
             success: false,
             statusCode: 400,

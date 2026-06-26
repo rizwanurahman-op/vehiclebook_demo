@@ -3,6 +3,7 @@ import mongoose, { Schema, Document } from "mongoose";
 export type PaymentMode = "Cash" | "Online" | "Cheque" | "UPI";
 
 export interface IInvestment extends Document {
+    adminId: mongoose.Types.ObjectId;
     investmentId: string;
     date: Date;
     lender: mongoose.Types.ObjectId;
@@ -50,11 +51,13 @@ const investmentSchema = new Schema<IInvestment>(
             type: String,
             trim: true,
         },
+        adminId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     },
     { timestamps: true }
 );
 
 investmentSchema.index({ lender: 1, date: -1 });
 investmentSchema.index({ date: -1 });
+investmentSchema.index({ adminId: 1, date: -1 });
 
 export const Investment = mongoose.model<IInvestment>("Investment", investmentSchema);

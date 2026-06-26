@@ -12,6 +12,7 @@ export interface ICollectionCounts {
 }
 
 export interface IBackupLog extends Document {
+    adminId: mongoose.Types.ObjectId;
     backupId: string;
     schedule: "manual" | "daily" | "weekly" | "monthly";
     status: "in_progress" | "completed" | "failed";
@@ -126,11 +127,13 @@ const backupLogSchema = new Schema<IBackupLog>(
             ref: "User",
             default: null,
         },
+        adminId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     },
     { timestamps: true }
 );
 
 backupLogSchema.index({ schedule: 1, status: 1 });
 backupLogSchema.index({ startedAt: -1 });
+backupLogSchema.index({ adminId: 1, startedAt: -1 });
 
 export const BackupLog = mongoose.model<IBackupLog>("BackupLog", backupLogSchema);

@@ -4,5 +4,5 @@ dist
 .env.*
 *.log
 coverage
-src/scripts/seed.ts
+src/scripts/
 backups/

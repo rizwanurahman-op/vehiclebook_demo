@@ -5,7 +5,20 @@ export interface IUser extends Document {
     username: string;
     email: string;
     passwordHash: string;
-    role: "admin" | "viewer";
+    role: "superadmin" | "admin" | "viewer";
+    /**
+     * For viewers: points to the admin who owns them.
+     * For admins/superadmins: null.
+     */
+    adminId: mongoose.Types.ObjectId | null;
+    /** Superadmin can suspend admin accounts without deleting them. */
+    isActive: boolean;
+    /** Explicit suspension flag — true when superadmin suspends the account */
+    isSuspended: boolean;
+    /** Admin-specific profile metadata */
+    businessName?: string;
+    phone?: string;
+    plan?: "free" | "pro" | "enterprise";
     refreshToken: string | null;
     /**
      * Refresh token family ID (UUID).
@@ -46,8 +59,36 @@ const userSchema = new Schema<IUser>(
         },
         role: {
             type: String,
-            enum: ["admin", "viewer"],
+            enum: ["superadmin", "admin", "viewer"],
             default: "admin",
+        },
+        adminId: {
+            type: Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+            index: true,
+        },
+        isActive: {
+            type: Boolean,
+            default: true,
+        },
+        isSuspended: {
+            type: Boolean,
+            default: false,
+            index: true,
+        },
+        businessName: {
+            type: String,
+            trim: true,
+        },
+        phone: {
+            type: String,
+            trim: true,
+        },
+        plan: {
+            type: String,
+            enum: ["free", "pro", "enterprise"],
+            default: "free",
         },
         refreshToken: {
             type: String,
@@ -74,9 +115,12 @@ const userSchema = new Schema<IUser>(
     { timestamps: true }
 );
 
+// Compound indexes for common query patterns
+userSchema.index({ role: 1, isActive: 1 });
+userSchema.index({ adminId: 1, role: 1 });
+
 userSchema.methods.comparePassword = async function (password: string): Promise<boolean> {
     return bcrypt.compare(password, this.passwordHash);
 };
 
 export const User = mongoose.model<IUser>("User", userSchema);
-

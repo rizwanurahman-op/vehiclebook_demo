@@ -16,30 +16,31 @@ interface VehicleQuery {
     limit?: number;
 }
 
-export const createVehicle = async (data: Partial<IVehicle>): Promise<IVehicle> => {
-    // Prevent duplicate registration numbers across all inventory
+export const createVehicle = async (data: Partial<IVehicle>, adminId: string): Promise<IVehicle> => {
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    // Prevent duplicate registration numbers within this admin's inventory
     if (data.registrationNo) {
-        const existsInVehicles = await Vehicle.findOne({ registrationNo: data.registrationNo, isActive: true }).lean();
+        const existsInVehicles = await Vehicle.findOne({ adminId: adminOid, registrationNo: data.registrationNo, isActive: true }).lean();
         if (existsInVehicles) {
             throw new Error(`Vehicle with registration ${data.registrationNo} already exists (${(existsInVehicles as any).vehicleId}).`);
         }
-        const existsInConsignments = await ConsignmentVehicle.findOne({ registrationNo: data.registrationNo, isActive: true }).lean();
+        const existsInConsignments = await ConsignmentVehicle.findOne({ adminId: adminOid, registrationNo: data.registrationNo, isActive: true }).lean();
         if (existsInConsignments) {
             throw new Error(`Vehicle with registration ${data.registrationNo} already exists in Consignment Inventory (${(existsInConsignments as any).consignmentId}).`);
         }
     }
 
-    const vehicleId = await getNextId("vehicle");
-    const vehicle = new Vehicle({ ...data, vehicleId });
+    const vehicleId = await getNextId("vehicle", adminId);
+    const vehicle = new Vehicle({ ...data, vehicleId, adminId: adminOid });
     await vehicle.save();
     vehicle.activityLog.push({ action: "created", description: `Vehicle ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo}) purchased${vehicle.purchasedFrom ? ` from ${vehicle.purchasedFrom}` : ""}`, date: new Date() });
     await vehicle.save();
     return vehicle;
 };
 
-export const getVehicles = async (query: VehicleQuery): Promise<unknown> => {
+export const getVehicles = async (query: VehicleQuery, adminId: string): Promise<unknown> => {
     const { vehicleType, status, saleStatus, fundingSource, isFromExchange, search, dateFrom, dateTo, page = 1, limit = 20 } = query;
-    const filter: Record<string, unknown> = { isActive: true };
+    const filter: Record<string, unknown> = { isActive: true, adminId: new mongoose.Types.ObjectId(adminId) };
 
     if (vehicleType) filter.vehicleType = vehicleType;
     if (status) filter.status = status;
@@ -82,9 +83,9 @@ export const getVehicles = async (query: VehicleQuery): Promise<unknown> => {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
 };
 
-export const getVehicleById = async (id: string): Promise<IVehicle | null> => {
+export const getVehicleById = async (id: string, adminId: string): Promise<IVehicle | null> => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    return Vehicle.findOne({ _id: id, isActive: true });
+    return Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
 };
 
 // Fields to track in the audit diff when a vehicle is edited.
@@ -105,13 +106,13 @@ const AUDIT_FIELDS: [keyof IVehicle, string, FieldFormatter?][] = [
     ["notes",            "Notes"],
 ];
 
-export const updateVehicle = async (id: string, data: Partial<IVehicle>): Promise<IVehicle | null> => {
+export const updateVehicle = async (id: string, data: Partial<IVehicle>, adminId: string): Promise<IVehicle | null> => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
     // Use findOne + save() so the pre-save hook fires and recalculates all
     // derived fields (purchasePendingAmount, purchasePaymentStatus,
     // totalInvestment, profitLoss, etc.) whenever purchasePrice or other
     // fields change via "Edit Basic Information".
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
     // ── Build field-level diff before mutating the document ──────────
@@ -144,9 +145,9 @@ export const updateVehicle = async (id: string, data: Partial<IVehicle>): Promis
     return vehicle;
 };
 
-export const deleteVehicle = async (id: string): Promise<boolean> => {
+export const deleteVehicle = async (id: string, adminId: string): Promise<boolean> => {
     if (!mongoose.Types.ObjectId.isValid(id)) return false;
-    const result = await Vehicle.findOneAndUpdate({ _id: id, isActive: true }, { $set: { isActive: false } });
+    const result = await Vehicle.findOneAndUpdate({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) }, { $set: { isActive: false } });
     return !!result;
 };
 
@@ -159,9 +160,10 @@ interface VehicleStatsFilter {
     search?: string;
 }
 
-export const getVehicleStats = async (filter?: VehicleStatsFilter): Promise<unknown> => {
+export const getVehicleStats = async (filter?: VehicleStatsFilter, adminId?: string): Promise<unknown> => {
     // Build base match from filter params
     const baseMatch: Record<string, unknown> = { isActive: true };
+    if (adminId) baseMatch.adminId = new mongoose.Types.ObjectId(adminId);
     if (filter?.vehicleType) baseMatch.vehicleType = filter.vehicleType;
     if (filter?.status) baseMatch.status = filter.status;
     if (filter?.isFromExchange === "true") baseMatch.isFromExchange = true;
@@ -270,7 +272,7 @@ export const getVehicleStats = async (filter?: VehicleStatsFilter): Promise<unkn
     const ownMoney = fundingBreakdown.filter((f) => f._id.source === "own").reduce((s: number, f) => s + f.amount, 0);
     const investorMoney = fundingBreakdown.filter((f) => f._id.source !== "own").reduce((s: number, f) => s + f.amount, 0);
 
-    const recentActivity = await Vehicle.find({ isActive: true })
+    const recentActivity = await Vehicle.find(baseMatch)
         .sort({ updatedAt: -1 })
         .limit(10)
         .select("vehicleId vehicleType make model registrationNo datePurchased dateSold purchasePrice soldPrice status activityLog")
@@ -299,9 +301,9 @@ export const getVehicleStats = async (filter?: VehicleStatsFilter): Promise<unkn
 };
 
 // ── Sale Management ──────────────────────────────────────────────
-export const recordSale = async (id: string, data: { dateSold: string; soldPrice: number; soldTo?: string; soldToPhone?: string; nocStatus?: string; remarks?: string }) => {
+export const recordSale = async (id: string, data: { dateSold: string; soldPrice: number; soldTo?: string; soldToPhone?: string; nocStatus?: string; remarks?: string }, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
     vehicle.dateSold = new Date(data.dateSold);
@@ -321,9 +323,9 @@ export const recordSale = async (id: string, data: { dateSold: string; soldPrice
     return vehicle;
 };
 
-export const undoSale = async (id: string) => {
+export const undoSale = async (id: string, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
     // ── Restore exchange vehicles/consignments to their original state ──
@@ -408,9 +410,9 @@ export const undoSale = async (id: string) => {
 };
 
 // ── Purchase Payments ────────────────────────────────────────────
-export const updateNocStatus = async (id: string, nocStatus: string) => {
+export const updateNocStatus = async (id: string, nocStatus: string, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
     const prev = vehicle.nocStatus;
     vehicle.nocStatus = nocStatus as IVehicle["nocStatus"];
@@ -425,9 +427,9 @@ export const updateNocStatus = async (id: string, nocStatus: string) => {
     return vehicle;
 };
 
-export const addPurchasePayment = async (id: string, payment: { date: string; amount: number; mode: string; bankAccount?: string; notes?: string }) => {
+export const addPurchasePayment = async (id: string, payment: { date: string; amount: number; mode: string; bankAccount?: string; notes?: string }, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
     vehicle.purchasePayments.push({
@@ -448,9 +450,9 @@ export const addPurchasePayment = async (id: string, payment: { date: string; am
     return vehicle;
 };
 
-export const deletePurchasePayment = async (id: string, paymentId: string) => {
+export const deletePurchasePayment = async (id: string, paymentId: string, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(paymentId)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
     vehicle.purchasePayments = vehicle.purchasePayments.filter((p) => p._id.toString() !== paymentId);
     await vehicle.save();
@@ -469,9 +471,9 @@ export const addSalePayment = async (id: string, payment: {
     exchangeVehicleRegNo?: string;
     referenceNo?: string; notes?: string;
     createExchangeAs?: string; exchangeVehicleType?: string;
-}) => {
+}, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
     const isFinanceMode = payment.mode === "Finance";
@@ -596,9 +598,10 @@ export const addSalePayment = async (id: string, payment: {
                 exVehicle = previouslyDeactivated;
             } else {
                 // No prior record — create fresh
-                const newVehicleId = await getNextId("vehicle");
+                const newVehicleId = await getNextId("vehicle", adminId);
                 exVehicle = new Vehicle({
                     vehicleId: newVehicleId,
+                    adminId: new mongoose.Types.ObjectId(adminId),
                     vehicleType: sourceConsignment?.vehicleType || vType,
                     make: sourceConsignment?.make || exMake,
                     model: sourceConsignment?.model || exModel,
@@ -683,9 +686,10 @@ export const addSalePayment = async (id: string, payment: {
                 exConsignment = previouslyDeactivatedCV;
             } else {
                 // No prior record — create fresh
-                const newConsignmentId = await getNextId("consignment");
+                const newConsignmentId = await getNextId("consignment", adminId);
                 exConsignment = new CV({
                     consignmentId: newConsignmentId,
+                    adminId: new mongoose.Types.ObjectId(adminId),
                     saleType,
                     vehicleType: vType,
                     make: exMake,
@@ -750,9 +754,9 @@ export const addSalePayment = async (id: string, payment: {
     return { vehicle, exchangeVehicle };
 };
 
-export const deleteSalePayment = async (id: string, paymentId: string) => {
+export const deleteSalePayment = async (id: string, paymentId: string, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(paymentId)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
     // Find the payment being deleted BEFORE removing it
@@ -881,9 +885,10 @@ const syncCostFieldsFromBreakdowns = (vehicle: IVehicle) => {
     }
 };
 
-export const updateCosts = async (id: string, costs: Partial<IVehicle>) => {
+
+export const updateCosts = async (id: string, costs: Partial<IVehicle>, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
     Object.assign(vehicle, costs);
     // After manual update, still sync any categories that have items
@@ -894,9 +899,9 @@ export const updateCosts = async (id: string, costs: Partial<IVehicle>) => {
 };
 
 // Recalculate all cost fields from breakdown items (fixes stale data)
-export const recalcCosts = async (id: string) => {
+export const recalcCosts = async (id: string, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
     syncCostFieldsFromBreakdowns(vehicle);
     vehicle.activityLog.push({ action: "costs_recalculated", description: "Cost fields recalculated from breakdown items", date: new Date() });
@@ -904,9 +909,9 @@ export const recalcCosts = async (id: string) => {
     return vehicle;
 };
 
-export const addCostBreakdownItem = async (id: string, category: string, item: { name: string; amount: number; date?: string; notes?: string }) => {
+export const addCostBreakdownItem = async (id: string, category: string, item: { name: string; amount: number; date?: string; notes?: string }, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
     let breakdown = vehicle.costBreakdowns.find((b) => b.category === category);
@@ -935,9 +940,9 @@ export const addCostBreakdownItem = async (id: string, category: string, item: {
     return vehicle;
 };
 
-export const deleteCostBreakdownItem = async (id: string, itemId: string) => {
+export const deleteCostBreakdownItem = async (id: string, itemId: string, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const vehicle = await Vehicle.findOne({ _id: id, isActive: true });
+    const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
     for (const breakdown of vehicle.costBreakdowns) {
@@ -961,8 +966,9 @@ export const deleteCostBreakdownItem = async (id: string, itemId: string) => {
 };
 
 // ── Reports ──────────────────────────────────────────────────────
-export const getProfitLossReport = async (vehicleType?: string, dateFrom?: string, dateTo?: string): Promise<unknown> => {
+export const getProfitLossReport = async (vehicleType?: string, dateFrom?: string, dateTo?: string, adminId?: string): Promise<unknown> => {
     const match: Record<string, unknown> = { isActive: true, dateSold: { $ne: null } };
+    if (adminId) match.adminId = new (require("mongoose")).Types.ObjectId(adminId);
     if (vehicleType) match.vehicleType = vehicleType;
     if (dateFrom || dateTo) {
         const dateFilter: Record<string, Date> = {};
@@ -976,9 +982,11 @@ export const getProfitLossReport = async (vehicleType?: string, dateFrom?: strin
         .lean();
 };
 
-export const getMonthlyReport = async () => {
+export const getMonthlyReport = async (adminId?: string) => {
+    const matchBase: Record<string, unknown> = { isActive: true };
+    if (adminId) matchBase.adminId = new (require("mongoose")).Types.ObjectId(adminId);
     return Vehicle.aggregate([
-        { $match: { isActive: true } },
+        { $match: matchBase },
         {
             $facet: {
                 purchases: [
@@ -995,11 +1003,12 @@ export const getMonthlyReport = async () => {
     ]);
 };
 
-export const getPendingReport = async (params?: { vehicleType?: string; dateFrom?: string; dateTo?: string }): Promise<unknown> => {
+export const getPendingReport = async (params?: { vehicleType?: string; dateFrom?: string; dateTo?: string; adminId?: string }): Promise<unknown> => {
     const match: Record<string, unknown> = {
         isActive: true,
         saleStatus: { $in: ["balance_pending", "noc_pending", "noc_cash_pending"] },
     };
+    if (params?.adminId) match.adminId = new (require("mongoose")).Types.ObjectId(params.adminId);
     if (params?.vehicleType) match.vehicleType = params.vehicleType;
     if (params?.dateFrom || params?.dateTo) {
         const df: Record<string, Date> = {};
@@ -1013,9 +1022,11 @@ export const getPendingReport = async (params?: { vehicleType?: string; dateFrom
         .lean();
 };
 
-export const getInventoryReport = async () => {
+export const getInventoryReport = async (adminId?: string) => {
+    const matchBase: Record<string, unknown> = { isActive: true };
+    if (adminId) matchBase.adminId = new (require("mongoose")).Types.ObjectId(adminId);
     return Vehicle.aggregate([
-        { $match: { isActive: true } },
+        { $match: matchBase },
         {
             $group: {
                 _id: { vehicleType: "$vehicleType", status: "$status" },
@@ -1038,10 +1049,11 @@ interface PurchaseRegisterQuery {
     limit?: number;
 }
 
-export const getPurchaseRegister = async (query: PurchaseRegisterQuery): Promise<unknown> => {
-    const { vehicleType, paymentStatus, search, dateFrom, dateTo, page = 1, limit = 20 } = query;
+export const getPurchaseRegister = async (query: PurchaseRegisterQuery & { adminId?: string }): Promise<unknown> => {
+    const { vehicleType, paymentStatus, search, dateFrom, dateTo, page = 1, limit = 20, adminId } = query;
 
     const match: Record<string, unknown> = { isActive: true };
+    if (adminId) match.adminId = new (require("mongoose")).Types.ObjectId(adminId);
     if (vehicleType) match.vehicleType = vehicleType;
     if (paymentStatus && paymentStatus !== "all") match.purchasePaymentStatus = paymentStatus;
     if (dateFrom || dateTo) {
@@ -1117,16 +1129,17 @@ export const getPurchaseRegister = async (query: PurchaseRegisterQuery): Promise
 };
 
 // ── Cross-Collection Reg Number Lookup (for Exchange Picker) ──────
-export const lookupVehiclesByRegNo = async (q: string) => {
+export const lookupVehiclesByRegNo = async (q: string, adminId?: string) => {
     if (!q || q.trim().length < 2) return [];
     const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const regex = new RegExp(escaped, "i");
+    const adminFilter = adminId ? { adminId: new mongoose.Types.ObjectId(adminId) } : {};
 
     const [vehicles, consignments] = await Promise.all([
-        Vehicle.find({ isActive: true, registrationNo: regex })
+        Vehicle.find({ isActive: true, registrationNo: regex, ...adminFilter })
             .select("vehicleId vehicleType make model registrationNo status color year")
             .limit(8).lean(),
-        ConsignmentVehicle.find({ isActive: true, registrationNo: regex })
+        ConsignmentVehicle.find({ isActive: true, registrationNo: regex, ...adminFilter })
             .select("consignmentId saleType vehicleType make model registrationNo status color year")
             .limit(8).lean(),
     ]);

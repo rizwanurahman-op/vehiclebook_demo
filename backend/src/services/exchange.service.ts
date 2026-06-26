@@ -55,8 +55,9 @@ interface ExchangeQuery {
 }
 
 // ── Fetch exchange deals from Phase 2 (Vehicle salePayments) ──────
-async function getVehicleExchangeDeals(dateFrom?: string, dateTo?: string): Promise<ExchangeDeal[]> {
-    const match: Record<string, unknown> = { isActive: true, "salePayments.type": "exchange" };
+async function getVehicleExchangeDeals(adminId: string, dateFrom?: string, dateTo?: string): Promise<ExchangeDeal[]> {
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    const match: Record<string, unknown> = { isActive: true, adminId: adminOid, "salePayments.type": "exchange" };
     if (dateFrom || dateTo) {
         const df: Record<string, Date> = {};
         if (dateFrom) df.$gte = new Date(dateFrom);
@@ -129,8 +130,9 @@ async function getVehicleExchangeDeals(dateFrom?: string, dateTo?: string): Prom
 }
 
 // ── Fetch exchange deals from Phase 3 (Consignment buyerPayments) ──
-async function getConsignmentExchangeDeals(dateFrom?: string, dateTo?: string): Promise<ExchangeDeal[]> {
-    const match: Record<string, unknown> = { isActive: true, "buyerPayments.type": "exchange" };
+async function getConsignmentExchangeDeals(adminId: string, dateFrom?: string, dateTo?: string): Promise<ExchangeDeal[]> {
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    const match: Record<string, unknown> = { isActive: true, adminId: adminOid, "buyerPayments.type": "exchange" };
     if (dateFrom || dateTo) {
         const df: Record<string, Date> = {};
         if (dateFrom) df.$gte = new Date(dateFrom);
@@ -202,16 +204,16 @@ async function getConsignmentExchangeDeals(dateFrom?: string, dateTo?: string): 
 }
 
 // ── Public API ────────────────────────────────────────────────────
-export const getExchanges = async (query: ExchangeQuery) => {
+export const getExchanges = async (query: ExchangeQuery, adminId: string) => {
     const { collection, dateFrom, dateTo, page = 1, limit = 20 } = query;
 
     let deals: ExchangeDeal[] = [];
 
     if (!collection || collection === "vehicles") {
-        deals = deals.concat(await getVehicleExchangeDeals(dateFrom, dateTo));
+        deals = deals.concat(await getVehicleExchangeDeals(adminId, dateFrom, dateTo));
     }
     if (!collection || collection === "consignmentVehicles") {
-        deals = deals.concat(await getConsignmentExchangeDeals(dateFrom, dateTo));
+        deals = deals.concat(await getConsignmentExchangeDeals(adminId, dateFrom, dateTo));
     }
 
     // Sort by exchange date desc
@@ -226,15 +228,15 @@ export const getExchanges = async (query: ExchangeQuery) => {
 
 interface StatsQuery { dateFrom?: string; dateTo?: string; collection?: string; }
 
-export const getExchangeStats = async (query: StatsQuery = {}): Promise<ExchangeStats> => {
-    const { dateFrom, dateTo, collection } = query;
+export const getExchangeStats = async (query: StatsQuery & { adminId?: string } = {}): Promise<ExchangeStats> => {
+    const { dateFrom, dateTo, collection, adminId = "" } = query;
 
     const fetchV = (!collection || collection === "vehicles");
     const fetchC = (!collection || collection === "consignmentVehicles");
 
     const [vDeals, cDeals] = await Promise.all([
-        fetchV ? getVehicleExchangeDeals(dateFrom, dateTo) : Promise.resolve([]),
-        fetchC ? getConsignmentExchangeDeals(dateFrom, dateTo) : Promise.resolve([]),
+        fetchV ? getVehicleExchangeDeals(adminId, dateFrom, dateTo) : Promise.resolve([]),
+        fetchC ? getConsignmentExchangeDeals(adminId, dateFrom, dateTo) : Promise.resolve([]),
     ]);
 
     const all = [...vDeals, ...cDeals];

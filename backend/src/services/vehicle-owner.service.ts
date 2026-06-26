@@ -2,16 +2,16 @@ import mongoose from "mongoose";
 import { VehicleOwner, IVehicleOwner } from "../models/vehicle-owner.model";
 import { getNextId } from "./counter.service";
 
-export const createVehicleOwner = async (data: Partial<IVehicleOwner>): Promise<IVehicleOwner> => {
-    const ownerId = await getNextId("vehicleOwner");
-    const owner = new VehicleOwner({ ...data, ownerId });
+export const createVehicleOwner = async (data: Partial<IVehicleOwner>, adminId: string): Promise<IVehicleOwner> => {
+    const ownerId = await getNextId("vehicleOwner", adminId);
+    const owner = new VehicleOwner({ ...data, ownerId, adminId: new mongoose.Types.ObjectId(adminId) });
     await owner.save();
     return owner;
 };
 
-export const getVehicleOwners = async (query: { search?: string; page?: number; limit?: number }) => {
+export const getVehicleOwners = async (query: { search?: string; page?: number; limit?: number }, adminId: string) => {
     const { search, page = 1, limit = 50 } = query;
-    const filter: Record<string, unknown> = { isActive: true };
+    const filter: Record<string, unknown> = { isActive: true, adminId: new mongoose.Types.ObjectId(adminId) };
     if (search) {
         const trimmed = search.trim();
         if (trimmed) {
@@ -28,18 +28,22 @@ export const getVehicleOwners = async (query: { search?: string; page?: number; 
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
 };
 
-export const getVehicleOwnerById = async (id: string) => {
+export const getVehicleOwnerById = async (id: string, adminId: string) => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    return VehicleOwner.findOne({ _id: id, isActive: true });
+    return VehicleOwner.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
 };
 
-export const getVehicleOwnerWithSummary = async (id: string): Promise<unknown> => {
+export const getVehicleOwnerWithSummary = async (id: string, adminId: string): Promise<unknown> => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const owner = await VehicleOwner.findOne({ _id: id, isActive: true }).lean();
+    const owner = await VehicleOwner.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) }).lean();
     if (!owner) return null;
 
     const { ConsignmentVehicle } = await import("../models/consignment-vehicle.model");
-    const vehicles = await ConsignmentVehicle.find({ ownerId: new mongoose.Types.ObjectId(id), isActive: true })
+    const vehicles = await ConsignmentVehicle.find({
+        ownerId: new mongoose.Types.ObjectId(id),
+        isActive: true,
+        adminId: new mongoose.Types.ObjectId(adminId),
+    })
         .select("consignmentId make model registrationNo dateReceived dateSold soldPrice status paidToPayee totalReconCost")
         .sort({ dateReceived: -1 })
         .lean();
@@ -55,13 +59,20 @@ export const getVehicleOwnerWithSummary = async (id: string): Promise<unknown> =
     return { ...owner, totalVehiclesParked, totalVehiclesSold, currentlyParked, totalPaid, totalPending, vehicles };
 };
 
-export const updateVehicleOwner = async (id: string, data: Partial<IVehicleOwner>): Promise<IVehicleOwner | null> => {
+export const updateVehicleOwner = async (id: string, data: Partial<IVehicleOwner>, adminId: string): Promise<IVehicleOwner | null> => {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    return VehicleOwner.findOneAndUpdate({ _id: id, isActive: true }, { $set: data }, { new: true, runValidators: true });
+    return VehicleOwner.findOneAndUpdate(
+        { _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) },
+        { $set: data },
+        { new: true, runValidators: true }
+    );
 };
 
-export const deleteVehicleOwner = async (id: string): Promise<boolean> => {
+export const deleteVehicleOwner = async (id: string, adminId: string): Promise<boolean> => {
     if (!mongoose.Types.ObjectId.isValid(id)) return false;
-    const result = await VehicleOwner.findOneAndUpdate({ _id: id, isActive: true }, { $set: { isActive: false } });
+    const result = await VehicleOwner.findOneAndUpdate(
+        { _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) },
+        { $set: { isActive: false } }
+    );
     return !!result;
 };

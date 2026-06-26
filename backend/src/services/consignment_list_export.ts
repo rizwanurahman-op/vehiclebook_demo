@@ -24,9 +24,10 @@ const dSl = (s: string | null | undefined) =>
     s ? s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—";
 
 // ── Build MongoDB filter ──────────────────────────────────────────────────────
-const buildFilter = (query: ConsignmentListExportQuery): Record<string, unknown> => {
+const buildFilter = (query: ConsignmentListExportQuery, adminId: string): Record<string, unknown> => {
     const { saleType, vehicleType, status, search, dateFrom, dateTo } = query;
-    const filter: Record<string, unknown> = { isActive: true };
+    const mongoose = require("mongoose");
+    const filter: Record<string, unknown> = { isActive: true, adminId: new mongoose.Types.ObjectId(adminId) };
     if (saleType) filter.saleType = saleType;
     if (vehicleType) filter.vehicleType = vehicleType;
     if (status) filter.status = status;
@@ -50,8 +51,8 @@ const buildFilter = (query: ConsignmentListExportQuery): Record<string, unknown>
 };
 
 // ── CSV Export ───────────────────────────────────────────────────────────────
-export const exportConsignmentsCSV = async (query: ConsignmentListExportQuery): Promise<string> => {
-    const filter = buildFilter(query);
+export const exportConsignmentsCSV = async (query: ConsignmentListExportQuery, adminId: string): Promise<string> => {
+    const filter = buildFilter(query, adminId);
     const vehicles = await ConsignmentVehicle.find(filter).sort({ dateReceived: -1 }).lean();
 
     const esc = (x: unknown) => {
@@ -98,8 +99,8 @@ export const exportConsignmentsCSV = async (query: ConsignmentListExportQuery): 
 };
 
 // ── PDF Export ───────────────────────────────────────────────────────────────
-export const exportConsignmentsPDF = async (query: ConsignmentListExportQuery): Promise<Buffer> => {
-    const filter = buildFilter(query);
+export const exportConsignmentsPDF = async (query: ConsignmentListExportQuery, adminId: string): Promise<Buffer> => {
+    const filter = buildFilter(query, adminId);
     const vehicles = await ConsignmentVehicle.find(filter).sort({ dateReceived: -1 }).lean();
 
     const PDFDocument = (await import("pdfkit")).default;

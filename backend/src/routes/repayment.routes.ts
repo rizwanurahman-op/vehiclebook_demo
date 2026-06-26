@@ -5,13 +5,14 @@ import {
     exportRepayments, getRepaymentStats,
 } from "../controllers/repayment.controller";
 import { validate } from "../middleware/validate.middleware";
-import { authenticate, isAdmin } from "../middleware/auth.middleware";
+import { authenticate, isAdmin, resolveAdminScope } from "../middleware/auth.middleware";
 import { asyncHandler } from "../utils/async-handler";
 import { exportLimiter, writeLimiter } from "../middleware/rate-limit.middleware";
 import { createRepaymentSchema, updateRepaymentSchema } from "../schemas/repayment.schema";
 
 const router = Router();
 router.use(authenticate);
+router.use(resolveAdminScope);
 
 router.get("/stats",               asyncHandler(getRepaymentStats));
 router.get("/export",              exportLimiter, asyncHandler(exportRepayments));

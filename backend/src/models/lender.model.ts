@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from "mongoose";
 
 export interface ILender extends Document {
+    adminId: mongoose.Types.ObjectId;
     lenderId: string;
     name: string;
     phone?: string;
@@ -41,11 +42,13 @@ const lenderSchema = new Schema<ILender>(
             default: true,
             // index declared below via lenderSchema.index({ isActive: 1 })
         },
+        adminId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     },
     { timestamps: true }
 );
 
 lenderSchema.index({ name: 1 });
 lenderSchema.index({ isActive: 1 });
+lenderSchema.index({ adminId: 1, isActive: 1 });
 
 export const Lender = mongoose.model<ILender>("Lender", lenderSchema);

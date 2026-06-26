@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { authenticate, isAdmin } from "../middleware/auth.middleware";
+import { authenticate, isAdmin, resolveAdminScope } from "../middleware/auth.middleware";
 import { asyncHandler } from "../utils/async-handler";
 import { exportLimiter, writeLimiter } from "../middleware/rate-limit.middleware";
 import * as cc from "../controllers/consignment.controller";
 
 const router = Router();
 router.use(authenticate);
+router.use(resolveAdminScope);
 
 // ── Stats, Reports & Export (before /:id to avoid conflicts) ──────
 router.get("/stats", asyncHandler(cc.getConsignmentStats));

@@ -51,8 +51,11 @@ export const recordSaleSchema = z.object({
 export const updateSaleSchema = recordSaleSchema.partial();
 
 export const addPurchasePaymentSchema = z.object({
-    date: z.string().min(1),
-    amount: z.number().min(1, { message: "Amount must be > 0" }),
+    date: z.string().min(1, { message: "Date is required" }),
+    amount: z.preprocess(
+        (v) => (v === null || v === undefined || v === "" ? 0 : Number(v)),
+        z.number().min(0, { message: "Amount must be 0 or greater" })
+    ),
     mode: z.enum(["Cash", "Online", "Cheque", "UPI", "Bank Transfer"]),
     bankAccount: z.string().optional(),
     notes: z.string().optional(),
@@ -61,8 +64,11 @@ export const addPurchasePaymentSchema = z.object({
 export const updatePurchasePaymentSchema = addPurchasePaymentSchema.partial();
 
 export const addSalePaymentSchema = z.object({
-    date: z.string().min(1),
-    amount: z.number().min(0, { message: "Amount is required" }),
+    date: z.string().min(1, { message: "Date is required" }),
+    amount: z.preprocess(
+        (v) => (v === null || v === undefined || v === "" ? 0 : Number(v)),
+        z.number().min(0, { message: "Amount must be 0 or greater" })
+    ),
     mode: z.enum(["Cash", "Online", "Cheque", "UPI", "GPay", "Finance", "Bank Transfer"]),
     type: z.enum(["cash", "exchange"]).default("cash"),
     source: z.string().optional(),
@@ -79,6 +85,8 @@ export const addSalePaymentSchema = z.object({
     notes: z.string().optional(),
     createExchangeAs: z.enum(["phase2_purchase", "phase3_park_sale", "phase3_finance_sale", "skip"]).optional().default("phase2_purchase"),
     exchangeVehicleType: z.enum(["two_wheeler", "four_wheeler"]).optional(),
+    // Frontend-only toggle — acknowledged by backend and ignored after parsing
+    addToInventory: z.boolean().optional(),
 });
 
 export const updateSalePaymentSchema = addSalePaymentSchema.partial();

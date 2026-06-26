@@ -28,10 +28,11 @@ const dSl = (s: string | null | undefined) => {
 
 const escWord = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const buildVehicleFilter = (query: SalesExportQuery) => {
+const buildVehicleFilter = (query: SalesExportQuery, adminId: string) => {
     const { source, saleStatus, search, dateFrom, dateTo, isExchange } = query;
     if (source && source !== "vehicle") return null;
-    const match: Record<string, unknown> = { isActive: true, status: { $in: ["sold", "sold_pending"] } };
+    const mongoose = require("mongoose");
+    const match: Record<string, unknown> = { isActive: true, adminId: new mongoose.Types.ObjectId(adminId), status: { $in: ["sold", "sold_pending"] } };
     if (saleStatus && saleStatus !== "all") match.saleStatus = saleStatus;
     if (isExchange === "true") match.isExchange = true;
     if (dateFrom || dateTo) {
@@ -55,10 +56,11 @@ const buildVehicleFilter = (query: SalesExportQuery) => {
     return match;
 };
 
-const buildConsignmentFilter = (query: SalesExportQuery) => {
+const buildConsignmentFilter = (query: SalesExportQuery, adminId: string) => {
     const { source, saleStatus, search, dateFrom, dateTo, isExchange } = query;
     if (source && source !== "consignment") return null;
-    const match: Record<string, unknown> = { isActive: true, status: { $in: ["sold", "sold_pending"] } };
+    const mongoose = require("mongoose");
+    const match: Record<string, unknown> = { isActive: true, adminId: new mongoose.Types.ObjectId(adminId), status: { $in: ["sold", "sold_pending"] } };
     if (saleStatus && saleStatus !== "all") {
         const statusMap: Record<string, string> = { fully_received: "fully_closed", balance_pending: "partial" };
         match.settlementStatus = statusMap[saleStatus] || saleStatus;
@@ -86,7 +88,7 @@ const buildConsignmentFilter = (query: SalesExportQuery) => {
 };
 
 // ── CSV Export ──────────────────────────────────────────────────────────────
-export const exportSalesCSV = async (query: SalesExportQuery): Promise<string> => {
+export const exportSalesCSV = async (query: SalesExportQuery, adminId: string): Promise<string> => {
     const esc = (x: unknown) => {
         const s = String(x ?? "");
         return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
@@ -94,7 +96,7 @@ export const exportSalesCSV = async (query: SalesExportQuery): Promise<string> =
 
     const rows: string[] = [];
 
-    const vFilter = buildVehicleFilter(query);
+    const vFilter = buildVehicleFilter(query, adminId);
     if (vFilter) {
         const vehicles = await Vehicle.find(vFilter)
             .select("vehicleId vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice totalInvestment receivedAmount balanceAmount profitLoss profitLossPercentage saleStatus isExchange daysToSell")
@@ -112,7 +114,7 @@ export const exportSalesCSV = async (query: SalesExportQuery): Promise<string> =
         }
     }
 
-    const cFilter = buildConsignmentFilter(query);
+    const cFilter = buildConsignmentFilter(query, adminId);
     if (cFilter) {
         const consignments = await ConsignmentVehicle.find(cFilter)
             .select("consignmentId saleType vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice receivedAmount buyerBalance netProfit profitLossPercentage settlementStatus isExchange daysInShop")
@@ -137,7 +139,7 @@ export const exportSalesCSV = async (query: SalesExportQuery): Promise<string> =
 };
 
 // ── PDF Export ──────────────────────────────────────────────────────────────
-export const exportSalesPDF = async (query: SalesExportQuery): Promise<Buffer> => {
+export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): Promise<Buffer> => {
     type SaleRow = {
         refId: string; source: string; vehicleType: string; make: string; model: string;
         registrationNo: string; dateSold: Date | null; soldTo: string; soldToPhone: string;
@@ -146,7 +148,7 @@ export const exportSalesPDF = async (query: SalesExportQuery): Promise<Buffer> =
     };
     const allRows: SaleRow[] = [];
 
-    const vFilter = buildVehicleFilter(query);
+    const vFilter = buildVehicleFilter(query, adminId);
     if (vFilter) {
         const vehicles = await Vehicle.find(vFilter)
             .select("vehicleId vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice totalInvestment receivedAmount balanceAmount profitLoss profitLossPercentage saleStatus isExchange daysToSell")
@@ -165,7 +167,7 @@ export const exportSalesPDF = async (query: SalesExportQuery): Promise<Buffer> =
             });
         }
     }
-    const cFilter = buildConsignmentFilter(query);
+    const cFilter = buildConsignmentFilter(query, adminId);
     if (cFilter) {
         const consignments = await ConsignmentVehicle.find(cFilter)
             .select("consignmentId saleType vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice receivedAmount buyerBalance netProfit profitLossPercentage settlementStatus isExchange daysInShop")

@@ -1,10 +1,12 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import mongoose from "mongoose";
 import { User, IUser } from "../models/user.model";
 import { env } from "../config/env";
-import { ApiError, ConflictError, NotFoundError, UnauthorizedError } from "../utils/api-error";
+import { ApiError, ConflictError, NotFoundError, UnauthorizedError, ForbiddenError } from "../utils/api-error";
 import { sendPasswordResetEmail } from "./email.service";
+import { initializeCounters } from "./counter.service";
 
 interface RegisterInput {
     username: string;
@@ -22,10 +24,12 @@ interface TokenPair {
     refreshToken: string;
 }
 
-const generateTokens = (userId: string, role: string): TokenPair => {
-    // jwt.sign() expiresIn expects the branded StringValue type from the ms package.
-    // Zod parses env vars as plain string, so we cast to the accepted union type.
-    const accessToken = jwt.sign({ userId, role }, env.JWT_ACCESS_SECRET, {
+const generateTokens = (userId: string, role: string, adminId?: string): TokenPair => {
+    // Include adminId in JWT payload so resolveAdminScope can read it for viewers
+    const payload: Record<string, string> = { userId, role };
+    if (adminId) payload.adminId = adminId;
+
+    const accessToken = jwt.sign(payload, env.JWT_ACCESS_SECRET, {
         expiresIn: env.JWT_ACCESS_EXPIRY as jwt.SignOptions["expiresIn"],
     });
     const refreshToken = jwt.sign({ userId }, env.JWT_REFRESH_SECRET, {
@@ -42,11 +46,16 @@ const generateTokens = (userId: string, role: string): TokenPair => {
 // MUST be a valid bcrypt hash of cost 10 so bcrypt.compare() does real work.
 const DUMMY_HASH = "$2a$10$8AhGXgCY9XXlArtwvsJqg.kIPgthEqQc7fAKXlPnwt/vQm7hjiqdW";
 
+/**
+ * Public registration is disabled. Admins are only created by the superadmin.
+ * This stub is kept for the initial superadmin-seed bootstrap flow only.
+ * @deprecated Use registerAdmin() called by superadmin instead.
+ */
 const register = async (data: RegisterInput): Promise<{ user: IUser; tokens: TokenPair }> => {
-    // Check if any admin exists already
-    const existingAdmin = await User.findOne({ role: "admin" });
-    if (existingAdmin) {
-        throw new ConflictError("An admin account already exists. Only one admin is allowed.");
+    // Allow this only if NO admin or superadmin exists at all (first-time bootstrap)
+    const existingPrivileged = await User.findOne({ role: { $in: ["admin", "superadmin"] } });
+    if (existingPrivileged) {
+        throw new ConflictError("Registration is closed. Contact your SuperAdmin to create an account.");
     }
 
     const existingUser = await User.findOne({
@@ -56,8 +65,6 @@ const register = async (data: RegisterInput): Promise<{ user: IUser; tokens: Tok
         throw new ConflictError("Username or email already in use");
     }
 
-    // Use rounds=10 (OWASP recommended minimum). Rounds=12 is ~800ms on low-power
-    // servers (free Render dyno), causing noticeable login delays. 10 rounds ~100ms.
     const passwordHash = await bcrypt.hash(data.password, 10);
     const user = await User.create({
         username: data.username.toLowerCase(),
@@ -66,8 +73,10 @@ const register = async (data: RegisterInput): Promise<{ user: IUser; tokens: Tok
         role: "admin",
     });
 
+    // Initialize per-admin counters for this new admin
+    await initializeCounters(user._id.toString());
+
     const tokens = generateTokens(user._id.toString(), user.role);
-    // Use updateOne — avoids a redundant findById round-trip and runs no validators
     await User.updateOne(
         { _id: user._id },
         { $set: { refreshToken: tokens.refreshToken, refreshTokenFamily: crypto.randomUUID() } }
@@ -76,21 +85,97 @@ const register = async (data: RegisterInput): Promise<{ user: IUser; tokens: Tok
     return { user, tokens };
 };
 
+/**
+ * SuperAdmin creates a new Admin account.
+ */
+interface CreateAdminInput {
+    username: string;
+    email: string;
+    password: string;
+    businessName?: string;
+    phone?: string;
+    plan?: "free" | "pro" | "enterprise";
+}
+
+const registerAdmin = async (data: CreateAdminInput): Promise<IUser> => {
+    const existingUser = await User.findOne({
+        $or: [
+            { username: data.username.toLowerCase() },
+            { email: data.email.toLowerCase() },
+        ],
+    });
+    if (existingUser) {
+        throw new ConflictError("Username or email already in use");
+    }
+
+    const passwordHash = await bcrypt.hash(data.password, 10);
+    const user = await User.create({
+        username: data.username.toLowerCase(),
+        email: data.email.toLowerCase(),
+        passwordHash,
+        role: "admin",
+        businessName: data.businessName,
+        phone: data.phone,
+        plan: data.plan ?? "free",
+        isActive: true,
+    });
+
+    // Initialize per-admin ID counters (VH-00001, L001, etc.) for this new admin
+    await initializeCounters(user._id.toString());
+
+    return user;
+};
+
+/**
+ * SuperAdmin suspends an admin account (soft deactivation — data is preserved).
+ */
+const suspendAdmin = async (adminId: string): Promise<void> => {
+    const admin = await User.findById(adminId);
+    if (!admin) throw new NotFoundError("Admin");
+    if (admin.role !== "admin") throw new ForbiddenError("Can only suspend admin accounts");
+
+    await User.updateOne({ _id: adminId }, { $set: { isActive: false, isSuspended: true } });
+    // Wipe refresh token so the admin is immediately logged out
+    await User.updateOne({ _id: adminId }, { $set: { refreshToken: null, refreshTokenFamily: null } });
+};
+
+/**
+ * SuperAdmin reactivates a suspended admin.
+ */
+const reactivateAdmin = async (adminId: string): Promise<void> => {
+    const admin = await User.findById(adminId);
+    if (!admin) throw new NotFoundError("Admin");
+    if (admin.role !== "admin") throw new ForbiddenError("Can only reactivate admin accounts");
+
+    await User.updateOne({ _id: adminId }, { $set: { isActive: true, isSuspended: false } });
+};
+
 const login = async (data: LoginInput): Promise<{ user: IUser; tokens: TokenPair }> => {
     const user = await User.findOne({
         $or: [{ username: data.usernameOrEmail.toLowerCase() }, { email: data.usernameOrEmail.toLowerCase() }],
-    }).select("+passwordHash +refreshToken"); // Explicitly select sensitive fields needed for auth
+    }).select("+passwordHash +refreshToken");
 
     // SECURITY: Always run bcrypt.compare() even when user not found.
-    // This ensures response time is constant regardless of whether the username
-    // exists, preventing timing-based username enumeration attacks.
     const passwordToCheck = user ? (user.passwordHash || DUMMY_HASH) : DUMMY_HASH;
     const isValid = await bcrypt.compare(data.password, passwordToCheck);
 
     if (!user || !isValid) throw new UnauthorizedError("Invalid credentials");
 
-    const tokens = generateTokens(user._id.toString(), user.role);
-    // Use updateOne instead of user.save() — avoids full validator pass and is atomic
+    // Check if admin is suspended (viewers of a suspended admin are also blocked)
+    if (user.role === "admin" && !user.isActive) {
+        throw new UnauthorizedError("Your account has been suspended. Contact the SuperAdmin.");
+    }
+    if (user.role === "viewer" && user.adminId) {
+        const ownerAdmin = await User.findById(user.adminId).select("isActive");
+        if (ownerAdmin && !ownerAdmin.isActive) {
+            throw new UnauthorizedError("Your account is unavailable. Contact the administrator.");
+        }
+    }
+
+    // For viewers, embed their owning adminId into the JWT so resolveAdminScope can read it
+    const adminIdForToken = user.role === "viewer" ? user.adminId?.toString() : undefined;
+    const tokens = generateTokens(user._id.toString(), user.role, adminIdForToken);
+
     await User.updateOne(
         { _id: user._id },
         { $set: { refreshToken: tokens.refreshToken, refreshTokenFamily: crypto.randomUUID() } }
@@ -107,17 +192,17 @@ const refreshAccessToken = async (refreshToken: string): Promise<TokenPair> => {
         throw new UnauthorizedError("Invalid or expired refresh token");
     }
 
-    // Fetch user with both token fields (select:false fields must be explicitly requested)
     const user = await User.findById(decoded.userId).select("+refreshToken +refreshTokenFamily");
     if (!user) {
         throw new UnauthorizedError("User not found");
     }
 
+    // Check suspension during token refresh too
+    if (user.role === "admin" && !user.isActive) {
+        throw new UnauthorizedError("Account suspended");
+    }
+
     // ── Reuse detection ───────────────────────────────────────────────────────
-    // If the presented token does NOT match the stored one but the JWT decoded
-    // successfully (valid signature, not expired), it means a previously-rotated
-    // token is being replayed — classic refresh token theft scenario.
-    // Wipe the entire family to force a full re-login on all devices.
     if (user.refreshToken !== refreshToken) {
         console.warn(`[Auth] Refresh token reuse detected for userId=${user._id} — wiping session`);
         await User.updateOne(
@@ -127,12 +212,9 @@ const refreshAccessToken = async (refreshToken: string): Promise<TokenPair> => {
         throw new UnauthorizedError("Refresh token reuse detected. Please log in again.");
     }
 
-    // ── Rotate: issue a new token pair ────────────────────────────────────────
-    // Generate a fresh access + refresh token. The new refresh token inherits
-    // the same family ID so a future reuse of *this* token can still be traced.
-    const newTokens = generateTokens(user._id.toString(), user.role);
+    const adminIdForToken = user.role === "viewer" ? user.adminId?.toString() : undefined;
+    const newTokens = generateTokens(user._id.toString(), user.role, adminIdForToken);
 
-    // Persist the new refresh token (same family, new value)
     await User.updateOne(
         { _id: user._id },
         { $set: { refreshToken: newTokens.refreshToken } }
@@ -145,9 +227,7 @@ const logout = async (userId: string): Promise<void> => {
     await User.findByIdAndUpdate(userId, { refreshToken: null });
 };
 
-// Revoke session by refreshToken — used during logout when access token may be expired
 const logoutByRefreshToken = async (refreshToken: string): Promise<void> => {
-    // Must use updateOne since refreshToken is select:false — findOneAndUpdate would work too
     await User.updateOne({ refreshToken }, { $set: { refreshToken: null } });
 };
 
@@ -160,10 +240,11 @@ const getMe = async (userId: string): Promise<IUser> => {
 interface UpdateProfileInput {
     username?: string;
     email?: string;
+    businessName?: string;
+    phone?: string;
 }
 
 const updateProfile = async (userId: string, data: UpdateProfileInput): Promise<IUser> => {
-    // Check for conflicts on username/email (exclude current user)
     if (data.username || data.email) {
         const orConditions: Array<Record<string, string>> = [];
         if (data.username) orConditions.push({ username: data.username.toLowerCase() });
@@ -179,6 +260,8 @@ const updateProfile = async (userId: string, data: UpdateProfileInput): Promise<
     const updateData: Record<string, string> = {};
     if (data.username) updateData.username = data.username.toLowerCase();
     if (data.email) updateData.email = data.email.toLowerCase();
+    if (data.businessName) updateData.businessName = data.businessName;
+    if (data.phone) updateData.phone = data.phone;
 
     const user = await User.findByIdAndUpdate(userId, updateData, { new: true }).select("-passwordHash -refreshToken");
     if (!user) throw new NotFoundError("User");
@@ -198,26 +281,21 @@ const changePassword = async (userId: string, data: ChangePasswordInput): Promis
     if (!isValid) throw new UnauthorizedError("Current password is incorrect");
 
     const newHash = await bcrypt.hash(data.newPassword, 10);
-    // Use updateOne — avoids running full validators on the user document
     await User.updateOne({ _id: user._id }, { $set: { passwordHash: newHash } });
 };
 
 /**
  * Generate a password reset token, store its hash in DB, and send email.
  * SECURITY: Always returns success to prevent user enumeration.
- * (We never reveal whether an email address is registered.)
  */
 const forgotPassword = async (email: string): Promise<void> => {
     const user = await User.findOne({ email: email.toLowerCase() });
 
-    // Silently bail if no account found — do NOT throw, to prevent user enumeration
     if (!user) {
-        // Simulate processing time to prevent timing-based enumeration attacks
         await new Promise(resolve => setTimeout(resolve, 200 + Math.floor(Math.random() * 200)));
         return;
     }
 
-    // Generate a cryptographically secure random token
     const plainToken = crypto.randomBytes(32).toString("hex");
     const hashedToken = crypto.createHash("sha256").update(plainToken).digest("hex");
 
@@ -225,13 +303,11 @@ const forgotPassword = async (email: string): Promise<void> => {
     user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
     await user.save();
 
-    // Build the reset URL (frontend page that reads the token from query)
     const resetUrl = `${env.CLIENT_URL}/auth/reset-password?token=${plainToken}`;
 
     try {
         await sendPasswordResetEmail(user.email, resetUrl);
     } catch (emailError) {
-        // Roll back the token so the user can try again cleanly
         user.passwordResetToken = null;
         user.passwordResetExpires = null;
         await user.save();
@@ -240,22 +316,17 @@ const forgotPassword = async (email: string): Promise<void> => {
     }
 };
 
-
 interface ResetPasswordInput {
     token: string;
     newPassword: string;
 }
 
-/**
- * Validate the reset token and set a new password.
- */
 const resetPassword = async (data: ResetPasswordInput): Promise<void> => {
-    // Hash the plain token to compare against the stored hashed token
     const hashedToken = crypto.createHash("sha256").update(data.token).digest("hex");
 
     const user = await User.findOne({
         passwordResetToken: hashedToken,
-        passwordResetExpires: { $gt: new Date() }, // token not expired
+        passwordResetExpires: { $gt: new Date() },
     }).select("+passwordResetToken +passwordResetExpires +refreshToken +refreshTokenFamily");
 
     if (!user) {
@@ -265,7 +336,6 @@ const resetPassword = async (data: ResetPasswordInput): Promise<void> => {
     user.passwordHash = await bcrypt.hash(data.newPassword, 10);
     user.passwordResetToken = null;
     user.passwordResetExpires = null;
-    // Invalidate any existing sessions — wipe both token and family
     user.refreshToken = null;
     user.refreshTokenFamily = null;
     await user.save();
@@ -273,6 +343,9 @@ const resetPassword = async (data: ResetPasswordInput): Promise<void> => {
 
 const authService = {
     register,
+    registerAdmin,
+    suspendAdmin,
+    reactivateAdmin,
     login,
     refreshAccessToken,
     logout,

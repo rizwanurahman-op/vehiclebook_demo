@@ -11,11 +11,12 @@ import * as telegramService from "../services/telegram.service";
 import { UpdateBackupSettingsInput, TriggerBackupInput } from "../schemas/backup.schema";
 
 // ─── GET /api/v1/backups ─────────────────────────────────────────────────────
-export const getBackupHistory = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const getBackupHistory = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const page  = Math.max(1, parseInt(String(req.query.page  ?? "1"),  10));
         const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? "20"), 10)));
-        const result = await backupService.listBackups(page, limit);
+        const adminId = req.user!.userId;
+        const result = await backupService.listBackups(page, limit, adminId);
         res.status(200).json(
             apiResponse(200, "Backup history fetched", result.data, {
                 page: result.page, limit, total: result.total, totalPages: result.totalPages,
@@ -25,9 +26,10 @@ export const getBackupHistory = async (req: Request, res: Response, next: NextFu
 };
 
 // ─── GET /api/v1/backups/settings ─────────────────────────────────────────────
-export const getSettings = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const getSettings = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const settings = await getBackupSettings();
+        const adminId = req.user!.userId;
+        const settings = await getBackupSettings(adminId);
         res.status(200).json(apiResponse(200, "Backup settings fetched", settings));
     } catch (error) { next(error); }
 };
@@ -36,15 +38,17 @@ export const getSettings = async (_req: Request, res: Response, next: NextFuncti
 export const updateSettings = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const body = req.body as UpdateBackupSettingsInput;
-        let settings = await BackupSettings.findOne();
+        const adminId = req.user!.userId;
+        const adminOid = new (await import("mongoose")).Types.ObjectId(adminId);
+        let settings = await BackupSettings.findOne({ adminId: adminOid });
         if (!settings) {
-            settings = await BackupSettings.create({ ...body, lastModifiedBy: req.user!.userId });
+            settings = await BackupSettings.create({ ...body, adminId: adminOid, lastModifiedBy: req.user!.userId });
         } else {
             Object.assign(settings, body);
             settings.lastModifiedBy = req.user!.userId as unknown as typeof settings.lastModifiedBy;
             await settings.save();
         }
-        await schedulerService.reloadScheduler();
+        await schedulerService.reloadScheduler(adminId);
         res.status(200).json(apiResponse(200, "Backup settings updated successfully", settings));
     } catch (error) { next(error); }
 };
@@ -53,25 +57,28 @@ export const updateSettings = async (req: AuthRequest, res: Response, next: Next
 export const triggerBackup = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { schedule } = req.body as TriggerBackupInput;
+        const adminId = req.user!.userId;
         res.status(202).json(
             apiResponse(202, `Backup triggered. A ${schedule} backup is now running in the background.`)
         );
-        backupService.runBackup(schedule, req.user!.userId).catch((err: unknown) => {
+        backupService.runBackup(schedule, adminId, adminId).catch((err: unknown) => {
             console.error(`❌ Background ${schedule} backup failed:`, err);
         });
     } catch (error) { next(error); }
 };
 
 // ─── GET /api/v1/backups/status ───────────────────────────────────────────────
-export const getStorageStatus = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const getStorageStatus = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const configured = telegramService.isTelegramConfigured();
         const { env: envConfig } = await import("../config/env");
         const isPasswordProtected = !!envConfig.BACKUP_ZIP_PASSWORD;
         const isEmailConfigured   = !!(envConfig.EMAIL_USER && envConfig.EMAIL_PASS);
+        const adminId = req.user!.userId;
+        const adminOid = new (await import("mongoose")).Types.ObjectId(adminId);
 
         if (!configured) {
-            const total = await BackupLog.countDocuments({ status: "completed" });
+            const total = await BackupLog.countDocuments({ status: "completed", adminId: adminOid });
             res.status(200).json(apiResponse(200, "Storage status", {
                 configured: false,
                 connected: false,
@@ -87,7 +94,7 @@ export const getStorageStatus = async (_req: Request, res: Response, next: NextF
         try {
             const [connectionInfo, total] = await Promise.all([
                 telegramService.testTelegramConnection(),
-                BackupLog.countDocuments({ status: "completed" }),
+                BackupLog.countDocuments({ status: "completed", adminId: adminOid }),
             ]);
             res.status(200).json(apiResponse(200, "Storage status", {
                 configured: true,
@@ -114,10 +121,11 @@ export const getStorageStatus = async (_req: Request, res: Response, next: NextF
 
 // ─── GET /api/v1/backups/:id/download ────────────────────────────────────────
 // Streams a locally stored backup (fallback only — Telegram is the primary storage)
-export const downloadBackup = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const downloadBackup = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const id = String(req.params.id);
-        const { filePath, fileName } = await backupService.getBackupLocalPath(id);
+        const adminId = req.user!.userId;
+        const { filePath, fileName } = await backupService.getBackupLocalPath(id, adminId);
         const stat = fs.statSync(filePath);
         res.setHeader("Content-Type", "application/zip");
         res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
@@ -129,12 +137,13 @@ export const downloadBackup = async (req: Request, res: Response, next: NextFunc
 };
 
 // ─── DELETE /api/v1/backups/:id ──────────────────────────────────────────────
-export const deleteBackup = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const deleteBackup = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const id = String(req.params.id);
-        const log = await BackupLog.findById(id);
+        const adminId = req.user!.userId;
+        const log = await BackupLog.findOne({ _id: id, adminId: new (await import("mongoose")).Types.ObjectId(adminId) });
         if (!log) throw new NotFoundError("Backup");
-        await backupService.deleteBackup(id);
+        await backupService.deleteBackup(id, adminId);
         res.status(200).json(apiResponse(200, "Backup deleted successfully"));
     } catch (error) { next(error); }
 };

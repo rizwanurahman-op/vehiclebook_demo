@@ -1,11 +1,18 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-interface SessionUser {
+export interface SessionUser {
     id: string;
     username: string;
     email: string;
-    role: "admin" | "viewer";
+    role: "superadmin" | "admin" | "viewer";
+    /** For viewers: points to the admin they belong to */
+    adminId?: string;
+    /** Admin profile metadata */
+    businessName?: string;
+    phone?: string;
+    plan?: "free" | "pro" | "enterprise";
+    isActive?: boolean;
 }
 
 interface SessionStore {
@@ -14,11 +21,15 @@ interface SessionStore {
     setSession: (user: SessionUser, accessToken: string) => void;
     updateUser: (user: Partial<SessionUser>) => void;
     clearSession: () => void;
+    // Convenience selectors
+    isSuperAdmin: () => boolean;
+    isAdmin: () => boolean;
+    isViewer: () => boolean;
 }
 
 export const useSessionStore = create<SessionStore>()(
     persist(
-        set => ({
+        (set, get) => ({
             user: null,
             accessToken: null,
             setSession: (user, accessToken) => set({ user, accessToken }),
@@ -26,6 +37,11 @@ export const useSessionStore = create<SessionStore>()(
                 user: state.user ? { ...state.user, ...updates } : null,
             })),
             clearSession: () => set({ user: null, accessToken: null }),
+
+            // Role helpers — use these instead of comparing role strings directly
+            isSuperAdmin: () => get().user?.role === "superadmin",
+            isAdmin: () => get().user?.role === "admin",
+            isViewer: () => get().user?.role === "viewer",
         }),
         {
             name: "vb-session",

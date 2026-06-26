@@ -23,12 +23,13 @@ const buildDateFilter = (dateFrom?: string, dateTo?: string): Record<string, Dat
 };
 
 // ── getLenderSummary ───────────────────────────────────────────────────────────
-const getLenderSummary = async (query: SummaryQuery) => {
+const getLenderSummary = async (query: SummaryQuery, adminId: string) => {
     const page  = Math.max(1, parseInt(query.page  || "1",   10));
     const limit = Math.min(200, Math.max(1, parseInt(query.limit || "100", 10)));
     const skip  = (page - 1) * limit;
 
-    const lenderMatch: Record<string, unknown> = {};
+    const adminOid = new (require("mongoose")).Types.ObjectId(adminId);
+    const lenderMatch: Record<string, unknown> = { adminId: adminOid };
     if (query.status === "active")        lenderMatch.isActive = true;
     else if (query.status === "inactive") lenderMatch.isActive = false;
     if (query.search) {
@@ -88,21 +89,22 @@ const getLenderSummary = async (query: SummaryQuery) => {
 };
 
 // ── getSingleLenderSummary ─────────────────────────────────────────────────────
-const getSingleLenderSummary = async (lenderId: string) => {
-    const lender = await Lender.findById(lenderId).lean();
+const getSingleLenderSummary = async (lenderId: string, adminId: string) => {
+    const adminOid = new (require("mongoose")).Types.ObjectId(adminId);
+    const lender = await Lender.findOne({ _id: lenderId, adminId: adminOid }).lean();
     if (!lender) return null;
 
     const [investAgg, principalAgg, profitAgg] = await Promise.all([
         Investment.aggregate([
-            { $match: { lender: lender._id } },
+            { $match: { lender: lender._id, adminId: adminOid } },
             { $group: { _id: null, total: { $sum: "$amountReceived" }, count: { $sum: 1 } } },
         ]),
         Repayment.aggregate([
-            { $match: { lender: lender._id, repaymentType: { $in: ["Principal", null] } } },
+            { $match: { lender: lender._id, adminId: adminOid, repaymentType: { $in: ["Principal", null] } } },
             { $group: { _id: null, total: { $sum: "$amountPaid" }, count: { $sum: 1 } } },
         ]),
         Repayment.aggregate([
-            { $match: { lender: lender._id, repaymentType: "Profit" } },
+            { $match: { lender: lender._id, adminId: adminOid, repaymentType: "Profit" } },
             { $group: { _id: null, total: { $sum: "$amountPaid" }, count: { $sum: 1 } } },
         ]),
     ]);
@@ -122,26 +124,29 @@ const getSingleLenderSummary = async (lenderId: string) => {
 };
 
 // ── getDashboardStats ───────────────────────────────────────────────────────────────────────────────
-const getDashboardStats = async () => {
+const getDashboardStats = async (adminId: string) => {
+    const adminOid = new (require("mongoose")).Types.ObjectId(adminId);
     const [
         totalLenders, activeLenders, investAgg, principalAgg, profitAgg,
         recentInvestments, recentRepayments, monthlyTrend, topOutstanding,
     ] = await Promise.all([
-        Lender.countDocuments({}),
-        Lender.countDocuments({ isActive: true }),
-        Investment.aggregate([{ $group: { _id: null, total: { $sum: "$amountReceived" } } }]),
-        Repayment.aggregate([{ $match: { repaymentType: { $in: ["Principal", null] } } }, { $group: { _id: null, total: { $sum: "$amountPaid" } } }]),
-        Repayment.aggregate([{ $match: { repaymentType: "Profit" } }, { $group: { _id: null, total: { $sum: "$amountPaid" } } }]),
-        Investment.find({}).populate("lender", "lenderId name").sort({ date: -1 }).limit(5).lean(),
-        Repayment.find({}).populate("lender",  "lenderId name").sort({ date: -1 }).limit(5).lean(),
+        Lender.countDocuments({ adminId: adminOid }),
+        Lender.countDocuments({ isActive: true, adminId: adminOid }),
+        Investment.aggregate([{ $match: { adminId: adminOid } }, { $group: { _id: null, total: { $sum: "$amountReceived" } } }]),
+        Repayment.aggregate([{ $match: { adminId: adminOid, repaymentType: { $in: ["Principal", null] } } }, { $group: { _id: null, total: { $sum: "$amountPaid" } } }]),
+        Repayment.aggregate([{ $match: { adminId: adminOid, repaymentType: "Profit" } }, { $group: { _id: null, total: { $sum: "$amountPaid" } } }]),
+        Investment.find({ adminId: adminOid }).populate("lender", "lenderId name").sort({ date: -1 }).limit(5).lean(),
+        Repayment.find({ adminId: adminOid }).populate("lender",  "lenderId name").sort({ date: -1 }).limit(5).lean(),
         Investment.aggregate([
+            { $match: { adminId: adminOid } },
             { $group: { _id: { year: { $year: "$date" }, month: { $month: "$date" } }, totalInvested: { $sum: "$amountReceived" } } },
             { $sort: { "_id.year": 1, "_id.month": 1 } },
             { $limit: 12 },
         ]),
         Lender.aggregate([
-            { $lookup: { from: "investments", localField: "_id", foreignField: "lender", as: "investments" } },
-            { $lookup: { from: "repayments", let: { lid: "$_id" }, pipeline: [{ $match: { $expr: { $eq: ["$lender", "$$lid"] }, repaymentType: { $in: ["Principal", null] } } }], as: "principalRepayments" } },
+            { $match: { adminId: adminOid } },
+            { $lookup: { from: "investments", let: { lid: "$_id" }, pipeline: [{ $match: { $expr: { $and: [{ $eq: ["$lender", "$$lid"] }, { $eq: ["$adminId", adminOid] }] } } }], as: "investments" } },
+            { $lookup: { from: "repayments", let: { lid: "$_id" }, pipeline: [{ $match: { $expr: { $and: [{ $eq: ["$lender", "$$lid"] }, { $eq: ["$adminId", adminOid] }] }, repaymentType: { $in: ["Principal", null] } } }], as: "principalRepayments" } },
             { $project: { name: 1, lenderId: 1, balance: { $subtract: [{ $sum: "$investments.amountReceived" }, { $sum: "$principalRepayments.amountPaid" }] } } },
             { $match: { balance: { $gt: 0 } } },
             { $sort: { balance: -1 } },
@@ -171,8 +176,8 @@ const getDashboardStats = async () => {
     ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 10);
 
     const [principalMonthly, profitMonthly] = await Promise.all([
-        Repayment.aggregate([{ $match: { repaymentType: { $in: ["Principal", null] } } }, { $group: { _id: { year: { $year: "$date" }, month: { $month: "$date" } }, totalPrincipal: { $sum: "$amountPaid" } } }, { $sort: { "_id.year": 1, "_id.month": 1 } }, { $limit: 12 }]),
-        Repayment.aggregate([{ $match: { repaymentType: "Profit" } }, { $group: { _id: { year: { $year: "$date" }, month: { $month: "$date" } }, totalProfit: { $sum: "$amountPaid" } } }, { $sort: { "_id.year": 1, "_id.month": 1 } }, { $limit: 12 }]),
+        Repayment.aggregate([{ $match: { adminId: adminOid, repaymentType: { $in: ["Principal", null] } } }, { $group: { _id: { year: { $year: "$date" }, month: { $month: "$date" } }, totalPrincipal: { $sum: "$amountPaid" } } }, { $sort: { "_id.year": 1, "_id.month": 1 } }, { $limit: 12 }]),
+        Repayment.aggregate([{ $match: { adminId: adminOid, repaymentType: "Profit" } }, { $group: { _id: { year: { $year: "$date" }, month: { $month: "$date" } }, totalProfit: { $sum: "$amountPaid" } } }, { $sort: { "_id.year": 1, "_id.month": 1 } }, { $limit: 12 }]),
     ]);
 
     const principalMap = new Map(principalMonthly.map(r => [`${r._id.year}-${r._id.month}`, r.totalPrincipal]));
@@ -188,7 +193,7 @@ const getDashboardStats = async () => {
     // ── Vehicle stats ────────────────────────────────────────────────────────
     const [vehicleAgg, consignmentAgg] = await Promise.all([
         Vehicle.aggregate([
-            { $match: { isActive: true } },
+            { $match: { isActive: true, adminId: adminOid } },
             { $group: {
                 _id: null,
                 total:         { $sum: 1 },
@@ -204,7 +209,7 @@ const getDashboardStats = async () => {
             }}
         ]),
         ConsignmentVehicle.aggregate([
-            { $match: { isActive: true } },
+            { $match: { isActive: true, adminId: adminOid } },
             { $group: {
                 _id: null,
                 total:      { $sum: 1 },
@@ -254,8 +259,8 @@ const getDashboardStats = async () => {
 };
 
 // ── exportSummary ──────────────────────────────────────────────────────────────
-const exportSummary = async (query: Omit<SummaryQuery, "page" | "limit"> = {}) => {
-    const { data } = await getLenderSummary({ ...query, page: "1", limit: "1000" });
+const exportSummary = async (query: Omit<SummaryQuery, "page" | "limit"> & { adminId: string } = { adminId: "" }) => {
+    const { data } = await getLenderSummary({ ...query, page: "1", limit: "1000" }, query.adminId);
     return (data as Record<string, unknown>[]).map(r => ({
         "Lender ID":       r.lenderId,
         "Name":            r.name,

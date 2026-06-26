@@ -18,7 +18,7 @@ const validationError = (res: Response, errors: unknown[]) =>
 export const createConsignment = async (req: Request, res: Response): Promise<void> => {
     const parsed = createConsignmentSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
-    const vehicle = await cs.createConsignment(parsed.data as never);
+    const vehicle = await cs.createConsignment(parsed.data as never, (req as any).adminId!);
     res.status(201).json({ success: true, statusCode: 201, message: "Consignment registered successfully", data: vehicle });
 };
 
@@ -27,12 +27,12 @@ export const getConsignments = async (req: Request, res: Response): Promise<void
     const page  = Math.max(1, parseInt((req.query.page  as string) ?? "1",  10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "20", 10) || 20));
     const search = ((req.query.search as string) ?? "").slice(0, 100) || undefined;
-    const result = await cs.getConsignments({ saleType, vehicleType, status, settlementStatus, buyerPaymentStatus, payeePaymentStatus, search, dateFrom, dateTo, page, limit });
+    const result = await cs.getConsignments({ saleType, vehicleType, status, settlementStatus, buyerPaymentStatus, payeePaymentStatus, search, dateFrom, dateTo, page, limit }, (req as any).adminId!);
     res.json({ success: true, statusCode: 200, message: "Consignments fetched", data: result });
 };
 
 export const getConsignment = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await cs.getConsignmentById(req.params.id as string);
+    const vehicle = await cs.getConsignmentById(req.params.id as string, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Consignment fetched", data: vehicle });
 };
@@ -40,27 +40,27 @@ export const getConsignment = async (req: Request, res: Response): Promise<void>
 export const updateConsignment = async (req: Request, res: Response): Promise<void> => {
     const parsed = updateConsignmentSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
-    const vehicle = await cs.updateConsignment(req.params.id as string, parsed.data as never);
+    const vehicle = await cs.updateConsignment(req.params.id as string, parsed.data as never, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Consignment updated", data: vehicle });
 };
 
 export const deleteConsignment = async (req: Request, res: Response): Promise<void> => {
-    const ok = await cs.deleteConsignment(req.params.id as string);
+    const ok = await cs.deleteConsignment(req.params.id as string, (req as any).adminId!);
     if (!ok) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Consignment deleted" });
 };
 
 export const getConsignmentStats = async (req: Request, res: Response): Promise<void> => {
     const { saleType, vehicleType, status, search, dateFrom, dateTo } = req.query as Record<string, string>;
-    const stats = await cs.getConsignmentStats({ saleType, vehicleType, status, search, dateFrom, dateTo });
+    const stats = await cs.getConsignmentStats({ saleType, vehicleType, status, search, dateFrom, dateTo }, (req as any).adminId!);
     res.json({ success: true, statusCode: 200, message: "Stats fetched", data: stats });
 };
 
 export const updateConsignmentStatus = async (req: Request, res: Response): Promise<void> => {
     const parsed = updateConsignmentStatusSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
-    const vehicle = await cs.updateConsignmentStatus(req.params.id as string, parsed.data.status, parsed.data.notes);
+    const vehicle = await cs.updateConsignmentStatus(req.params.id as string, parsed.data.status, parsed.data.notes, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Status updated", data: vehicle });
 };
@@ -68,13 +68,13 @@ export const updateConsignmentStatus = async (req: Request, res: Response): Prom
 export const updateConsignmentNocStatus = async (req: Request, res: Response): Promise<void> => {
     const parsed = updateConsignmentNocStatusSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
-    const vehicle = await cs.updateNocStatus(req.params.id as string, parsed.data.nocStatus);
+    const vehicle = await cs.updateNocStatus(req.params.id as string, parsed.data.nocStatus, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "NOC status updated", data: vehicle });
 };
 
 export const returnConsignment = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await cs.returnConsignment(req.params.id as string, req.body.notes);
+    const vehicle = await cs.returnConsignment(req.params.id as string, req.body.notes, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Vehicle returned", data: vehicle });
 };
@@ -84,7 +84,7 @@ export const returnConsignment = async (req: Request, res: Response): Promise<vo
 export const updateCosts = async (req: Request, res: Response): Promise<void> => {
     const parsed = updateConsignmentCostsSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
-    const vehicle = await cs.updateCosts(req.params.id as string, parsed.data as Record<string, number>);
+    const vehicle = await cs.updateCosts(req.params.id as string, parsed.data as Record<string, number>, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Costs updated", data: vehicle });
 };
@@ -93,13 +93,13 @@ export const addCostBreakdownItem = async (req: Request, res: Response): Promise
     const parsed = addCostBreakdownItemSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
     const { category, ...item } = parsed.data;
-    const vehicle = await cs.addCostBreakdownItem(req.params.id as string, category, item);
+    const vehicle = await cs.addCostBreakdownItem(req.params.id as string, category, item, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.status(201).json({ success: true, statusCode: 201, message: "Cost item added", data: vehicle });
 };
 
 export const deleteCostBreakdownItem = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await cs.deleteCostBreakdownItem(req.params.id as string, req.params.itemId as string);
+    const vehicle = await cs.deleteCostBreakdownItem(req.params.id as string, req.params.itemId as string, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Cost item deleted", data: vehicle });
 };
@@ -109,13 +109,13 @@ export const deleteCostBreakdownItem = async (req: Request, res: Response): Prom
 export const recordSale = async (req: Request, res: Response): Promise<void> => {
     const parsed = recordConsignmentSaleSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
-    const vehicle = await cs.recordSale(req.params.id as string, parsed.data);
+    const vehicle = await cs.recordSale(req.params.id as string, parsed.data, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Sale recorded", data: vehicle });
 };
 
 export const undoSale = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await cs.undoSale(req.params.id as string);
+    const vehicle = await cs.undoSale(req.params.id as string, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Sale undone", data: vehicle });
 };
@@ -125,13 +125,13 @@ export const undoSale = async (req: Request, res: Response): Promise<void> => {
 export const addBuyerPayment = async (req: Request, res: Response): Promise<void> => {
     const parsed = addBuyerPaymentSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
-    const result = await cs.addBuyerPayment(req.params.id as string, parsed.data as never);
+    const result = await cs.addBuyerPayment(req.params.id as string, parsed.data as never, (req as any).adminId!);
     if (!result) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.status(201).json({ success: true, statusCode: 201, message: "Buyer payment recorded", data: result.vehicle, exchangeVehicle: result.exchangeVehicle });
 };
 
 export const deleteBuyerPayment = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await cs.deleteBuyerPayment(req.params.id as string, req.params.paymentId as string);
+    const vehicle = await cs.deleteBuyerPayment(req.params.id as string, req.params.paymentId as string, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Buyer payment deleted", data: vehicle });
 };
@@ -141,19 +141,19 @@ export const deleteBuyerPayment = async (req: Request, res: Response): Promise<v
 export const addPayeePayment = async (req: Request, res: Response): Promise<void> => {
     const parsed = addPayeePaymentSchema.safeParse(req.body);
     if (!parsed.success) { validationError(res, parsed.error.errors); return; }
-    const vehicle = await cs.addPayeePayment(req.params.id as string, parsed.data as never);
+    const vehicle = await cs.addPayeePayment(req.params.id as string, parsed.data as never, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.status(201).json({ success: true, statusCode: 201, message: "Payee payment recorded", data: vehicle });
 };
 
 export const deletePayeePayment = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await cs.deletePayeePayment(req.params.id as string, req.params.paymentId as string);
+    const vehicle = await cs.deletePayeePayment(req.params.id as string, req.params.paymentId as string, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Payee payment deleted", data: vehicle });
 };
 
 export const closePayeeSettlement = async (req: Request, res: Response): Promise<void> => {
-    const vehicle = await cs.closePayeeSettlement(req.params.id as string);
+    const vehicle = await cs.closePayeeSettlement(req.params.id as string, (req as any).adminId!);
     if (!vehicle) { res.status(404).json({ success: false, statusCode: 404, message: "Consignment not found" }); return; }
     res.json({ success: true, statusCode: 200, message: "Payee settlement closed", data: vehicle });
 };
@@ -162,16 +162,17 @@ export const closePayeeSettlement = async (req: Request, res: Response): Promise
 
 export const getReports = async (req: Request, res: Response): Promise<void> => {
     const { saleType, dateFrom, dateTo } = req.query as Record<string, string>;
-    const report = await cs.getConsignmentReports(saleType, dateFrom, dateTo);
+    const report = await cs.getConsignmentReports((req as any).adminId!, saleType, dateFrom, dateTo);
     res.json({ success: true, statusCode: 200, message: "Reports fetched", data: report });
 };
 
 export const exportReports = async (req: Request, res: Response): Promise<void> => {
     const { saleType, dateFrom, dateTo, format = "csv" } = req.query as Record<string, string>;
     const timestamp = new Date().toISOString().slice(0, 10);
+    const adminId = (req as any).adminId!;
 
     // Fetch only sold vehicles for P&L
-    const allData = await cs.getConsignmentReports(saleType, dateFrom, dateTo);
+    const allData = await cs.getConsignmentReports(adminId, saleType, dateFrom, dateTo);
     const vehicles = (allData as any).profitLoss as any[];
 
     if (format === "pdf") {
@@ -213,9 +214,10 @@ export const exportConsignments = async (req: Request, res: Response): Promise<v
     const { format = "csv", saleType, vehicleType, status, search, dateFrom, dateTo } = req.query as Record<string, string>;
     const q = { saleType, vehicleType, status, search, dateFrom, dateTo };
     const date = new Date().toISOString().slice(0, 10);
+    const adminId = (req as any).adminId!;
 
     if (format === "pdf") {
-        const buffer = await exportConsignmentsPDF(q);
+        const buffer = await exportConsignmentsPDF(q, adminId);
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", `attachment; filename="consignments_${date}.pdf"`);
         res.send(buffer);
@@ -223,7 +225,7 @@ export const exportConsignments = async (req: Request, res: Response): Promise<v
     }
 
     // Default: CSV
-    const csv = await exportConsignmentsCSV(q);
+    const csv = await exportConsignmentsCSV(q, adminId);
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", `attachment; filename="consignments_${date}.csv"`);
     res.send(csv);

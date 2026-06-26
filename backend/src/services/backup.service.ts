@@ -228,13 +228,14 @@ const sendBackupEmail = async (
 // (including the one just created), then purges the oldest ones so only
 // `retentionLimit` remain — both on Telegram and in the database.
 
-const applyRotation = async (schedule: Exclude<BackupSchedule, "manual">): Promise<void> => {
-    const settings = await getBackupSettings();
+const applyRotation = async (schedule: Exclude<BackupSchedule, "manual">, adminId: string): Promise<void> => {
+    const settings = await getBackupSettings(adminId);
     const retentionLimit = settings.retentionPolicy[schedule];
+    const adminOid = new mongoose.Types.ObjectId(adminId);
 
-    // Fetch ALL completed backups for this schedule type, sorted oldest first.
-    // We include the newly created backup so the count is accurate.
+    // Fetch completed backups for this schedule type scoped to this admin, sorted oldest first.
     const allCompleted = await BackupLog.find({
+        adminId: adminOid,
         schedule,
         status: "completed",
     }).sort({ startedAt: 1 });
@@ -271,7 +272,8 @@ const applyRotation = async (schedule: Exclude<BackupSchedule, "manual">): Promi
 
 export const runBackup = async (
     schedule: BackupSchedule,
-    userId: string | null = null
+    userId: string | null = null,
+    adminId: string | null = null
 ): Promise<BackupResult> => {
     const timestamp = formatTimestamp();
     const password = env.BACKUP_ZIP_PASSWORD || undefined;
@@ -294,6 +296,7 @@ export const runBackup = async (
         backupId, schedule, status: "in_progress", fileName, isPasswordProtected,
         startedAt: new Date(),
         createdBy: userId ? new mongoose.Types.ObjectId(userId) : null,
+        adminId: adminId ? new mongoose.Types.ObjectId(adminId) : new mongoose.Types.ObjectId(userId!),
     });
 
     const tmpBase = os.tmpdir();
@@ -349,8 +352,8 @@ export const runBackup = async (
         });
 
         // 6. Apply retention rotation (delete oldest beyond limit)
-        if (schedule !== "manual") {
-            await applyRotation(schedule);
+        if (schedule !== "manual" && (adminId || userId)) {
+            await applyRotation(schedule, adminId || userId!);
         }
 
         console.log(`🎉 [Backup] ${schedule} backup completed (${backupId})`);
@@ -385,19 +388,21 @@ export const runBackup = async (
 
 // ─── List Backup History ──────────────────────────────────────────────────────
 
-export const listBackups = async (page = 1, limit = 20) => {
+export const listBackups = async (page = 1, limit = 20, adminId?: string) => {
+    const filter = adminId ? { adminId: new mongoose.Types.ObjectId(adminId) } : {};
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
-        BackupLog.find().sort({ startedAt: -1 }).skip(skip).limit(limit).lean(),
-        BackupLog.countDocuments(),
+        BackupLog.find(filter).sort({ startedAt: -1 }).skip(skip).limit(limit).lean(),
+        BackupLog.countDocuments(filter),
     ]);
     return { data, total, page, totalPages: Math.ceil(total / limit) };
 };
 
 // ─── Delete a specific backup ─────────────────────────────────────────────────
 
-export const deleteBackup = async (id: string): Promise<void> => {
-    const log = await BackupLog.findById(id);
+export const deleteBackup = async (id: string, adminId?: string): Promise<void> => {
+    const filter = adminId ? { _id: id, adminId: new mongoose.Types.ObjectId(adminId) } : { _id: id };
+    const log = await BackupLog.findOne(filter);
     if (!log) throw new Error("Backup record not found");
 
     if (log.telegramMessageId && telegramService.isTelegramConfigured()) {
@@ -409,8 +414,9 @@ export const deleteBackup = async (id: string): Promise<void> => {
 
 // ─── Get local path for download (fallback only) ──────────────────────────────
 
-export const getBackupLocalPath = async (id: string): Promise<{ filePath: string; fileName: string }> => {
-    const log = await BackupLog.findById(id);
+export const getBackupLocalPath = async (id: string, adminId?: string): Promise<{ filePath: string; fileName: string }> => {
+    const filter = adminId ? { _id: id, adminId: new mongoose.Types.ObjectId(adminId) } : { _id: id };
+    const log = await BackupLog.findOne(filter);
     if (!log) throw new Error("Backup not found");
     if (!log.localPath || !fs.existsSync(log.localPath)) {
         throw new Error("This backup is stored on Telegram — open the Telegram link to download it");

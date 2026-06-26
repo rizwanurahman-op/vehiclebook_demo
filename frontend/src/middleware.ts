@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 const PUBLIC_PATHS = ["/auth/login", "/auth/register", "/auth/forgot-password", "/auth/reset-password"];
 
+/** Routes exclusively for superadmin — any other role gets redirected to /dashboard */
+const SUPERADMIN_ONLY_PATHS = ["/superadmin"];
+
 /** Routes that require admin role — viewers get redirected to /dashboard */
 const ADMIN_ONLY_PATHS = [
     "/consignments/new",
@@ -15,11 +18,11 @@ const ADMIN_ONLY_PATHS = [
  * Signature verification is done by the backend API on every request.
  * This lightweight decode is safe for UI-level routing only.
  */
-function decodeJwtRole(token: string): string | null {
+function decodeJwtPayload(token: string): { role?: string; adminId?: string } | null {
     try {
         const payload = token.split(".")[1];
         const decoded = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
-        return decoded?.role ?? null;
+        return decoded ?? null;
     } catch {
         return null;
     }
@@ -78,16 +81,18 @@ export function middleware(request: NextRequest) {
 
     const isPublicPath = PUBLIC_PATHS.some(p => pathname.startsWith(p));
 
-    // Logged in → redirect away from auth pages
+    // Logged in → redirect away from auth pages to role-appropriate home
     if (isPublicPath && token) {
-        return NextResponse.redirect(new URL("/dashboard", request.url));
+        const payload = decodeJwtPayload(token);
+        const role = payload?.role;
+        const redirectTo = role === "superadmin" ? "/superadmin/dashboard" : "/dashboard";
+        return NextResponse.redirect(new URL(redirectTo, request.url));
     }
 
     // Not logged in → redirect to login
     if (!isPublicPath && !token) {
         const loginUrl = new URL("/auth/login", request.url);
         // Only set callbackUrl for safe internal paths (prevents open redirect)
-        // Include query string so filters/params are restored after login
         if (isSafeInternalPath(pathname)) {
             const fullPath = pathname + (request.nextUrl.search || "");
             loginUrl.searchParams.set("callbackUrl", fullPath);
@@ -95,10 +100,24 @@ export function middleware(request: NextRequest) {
         return NextResponse.redirect(loginUrl);
     }
 
-    // Viewer trying to access admin-only routes → redirect to dashboard
+    // Role-based route guards
     if (token) {
-        const role = decodeJwtRole(token);
+        const payload = decodeJwtPayload(token);
+        const role = payload?.role;
+
+        // Superadmin-only routes: non-superadmin → redirect to /dashboard
+        const isSuperAdminOnly = SUPERADMIN_ONLY_PATHS.some(p => pathname.startsWith(p));
+        if (isSuperAdminOnly && role !== "superadmin") {
+            return NextResponse.redirect(new URL("/dashboard", request.url));
+        }
+
+        // Superadmin accessing admin-only routes → redirect to superadmin dashboard
         const isAdminOnly = ADMIN_ONLY_PATHS.some(p => pathname.startsWith(p));
+        if (isAdminOnly && role === "superadmin") {
+            return NextResponse.redirect(new URL("/superadmin/dashboard", request.url));
+        }
+
+        // Viewer trying to access admin-only routes → redirect to dashboard
         if (isAdminOnly && role !== "admin") {
             return NextResponse.redirect(new URL("/dashboard", request.url));
         }

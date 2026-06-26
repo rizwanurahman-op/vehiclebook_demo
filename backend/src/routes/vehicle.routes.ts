@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate, isAdmin } from "../middleware/auth.middleware";
+import { authenticate, isAdmin, resolveAdminScope } from "../middleware/auth.middleware";
 import { asyncHandler } from "../utils/async-handler";
 import { exportLimiter, writeLimiter } from "../middleware/rate-limit.middleware";
 import * as vc from "../controllers/vehicle.controller";
@@ -8,6 +8,7 @@ const router = Router();
 
 // All routes require authentication
 router.use(authenticate);
+router.use(resolveAdminScope);
 
 // ── Stats & Reports (before /:id to avoid conflicts) ─────────────
 router.get("/stats", asyncHandler(vc.getVehicleStats));

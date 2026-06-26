@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { Lender, ILender } from "../models/lender.model";
 import { Investment } from "../models/investment.model";
 import { Repayment } from "../models/repayment.model";
@@ -27,18 +28,18 @@ interface ListLendersQuery {
     status?: "active" | "inactive" | "all";
 }
 
-const create = async (data: CreateLenderInput): Promise<ILender> => {
-    const lenderId = await counterService.getNextId("lender");
-    return await Lender.create({ ...data, lenderId });
+const create = async (data: CreateLenderInput, adminId: string): Promise<ILender> => {
+    const lenderId = await counterService.getNextId("lender", adminId);
+    return await Lender.create({ ...data, lenderId, adminId: new mongoose.Types.ObjectId(adminId) });
 };
 
-const list = async (query: ListLendersQuery) => {
+const list = async (query: ListLendersQuery, adminId: string) => {
     const { page, limit, skip } = getPagination(query);
-    const filter: Record<string, unknown> = {};
+    const filter: Record<string, unknown> = { adminId: new mongoose.Types.ObjectId(adminId) };
 
     if (query.status === "active") filter.isActive = true;
     else if (query.status === "inactive") filter.isActive = false;
-    else filter.isActive = { $ne: false }; // default: active only... unless all
+    else filter.isActive = { $ne: false };
 
     if (query.status === "all") delete filter.isActive;
 
@@ -55,93 +56,103 @@ const list = async (query: ListLendersQuery) => {
         Lender.countDocuments(filter),
     ]);
 
-    // Attach aggregated summary data — only Principal repayments reduce the balance
     const lenderIds = lenders.map(l => l._id);
     const [investmentAggs, principalAggs, profitAggs] = await Promise.all([
         Investment.aggregate([
-            { $match: { lender: { $in: lenderIds } } },
+            { $match: { adminId: new mongoose.Types.ObjectId(adminId), lender: { $in: lenderIds } } },
             { $group: { _id: "$lender", totalBorrowed: { $sum: "$amountReceived" } } },
         ]),
         Repayment.aggregate([
-            { $match: { lender: { $in: lenderIds }, repaymentType: { $in: ["Principal", null, undefined] } } },
+            { $match: { adminId: new mongoose.Types.ObjectId(adminId), lender: { $in: lenderIds }, repaymentType: { $in: ["Principal", null, undefined] } } },
             { $group: { _id: "$lender", totalRepaid: { $sum: "$amountPaid" } } },
         ]),
         Repayment.aggregate([
-            { $match: { lender: { $in: lenderIds }, repaymentType: "Profit" } },
+            { $match: { adminId: new mongoose.Types.ObjectId(adminId), lender: { $in: lenderIds }, repaymentType: "Profit" } },
             { $group: { _id: "$lender", totalProfit: { $sum: "$amountPaid" } } },
         ]),
     ]);
 
-    const investMap   = new Map(investmentAggs.map(a => [a._id.toString(), a.totalBorrowed]));
-    const repayMap    = new Map(principalAggs.map(a => [a._id.toString(), a.totalRepaid]));
-    const profitMap   = new Map(profitAggs.map(a  => [a._id.toString(), a.totalProfit]));
+    const investMap = new Map(investmentAggs.map(a => [a._id.toString(), a.totalBorrowed]));
+    const repayMap = new Map(principalAggs.map(a => [a._id.toString(), a.totalRepaid]));
+    const profitMap = new Map(profitAggs.map(a => [a._id.toString(), a.totalProfit]));
 
     const enriched = lenders.map(l => {
         const totalBorrowed = investMap.get(l._id.toString()) ?? 0;
-        const totalRepaid   = repayMap.get(l._id.toString())  ?? 0;
-        const totalProfit   = profitMap.get(l._id.toString()) ?? 0;
+        const totalRepaid = repayMap.get(l._id.toString()) ?? 0;
+        const totalProfit = profitMap.get(l._id.toString()) ?? 0;
         return { ...l, totalBorrowed, totalRepaid, totalProfit, balancePayable: totalBorrowed - totalRepaid };
     });
 
     return { data: enriched, meta: buildPaginationMeta(total, page, limit) };
 };
 
-const getById = async (id: string) => {
-    const lender = await Lender.findById(id).lean();
+const getById = async (id: string, adminId: string) => {
+    const lender = await Lender.findOne({ _id: id, adminId: new mongoose.Types.ObjectId(adminId) }).lean();
     if (!lender) throw new NotFoundError("Lender");
 
-    // Principal repayments reduce balance; Profit payments are tracked separately
+    const adminOid = new mongoose.Types.ObjectId(adminId);
     const [investAgg, principalAgg, profitAgg] = await Promise.all([
         Investment.aggregate([
-            { $match: { lender: lender._id } },
+            { $match: { adminId: adminOid, lender: lender._id } },
             { $group: { _id: null, totalBorrowed: { $sum: "$amountReceived" } } },
         ]),
         Repayment.aggregate([
-            { $match: { lender: lender._id, repaymentType: { $in: ["Principal", null] } } },
+            { $match: { adminId: adminOid, lender: lender._id, repaymentType: { $in: ["Principal", null] } } },
             { $group: { _id: null, totalRepaid: { $sum: "$amountPaid" } } },
         ]),
         Repayment.aggregate([
-            { $match: { lender: lender._id, repaymentType: "Profit" } },
+            { $match: { adminId: adminOid, lender: lender._id, repaymentType: "Profit" } },
             { $group: { _id: null, totalProfit: { $sum: "$amountPaid" } } },
         ]),
     ]);
 
-    const totalBorrowed = investAgg[0]?.totalBorrowed  ?? 0;
-    const totalRepaid   = principalAgg[0]?.totalRepaid ?? 0;
-    const totalProfit   = profitAgg[0]?.totalProfit    ?? 0;
+    const totalBorrowed = investAgg[0]?.totalBorrowed ?? 0;
+    const totalRepaid = principalAgg[0]?.totalRepaid ?? 0;
+    const totalProfit = profitAgg[0]?.totalProfit ?? 0;
 
     return { ...lender, totalBorrowed, totalRepaid, totalProfit, balancePayable: totalBorrowed - totalRepaid };
 };
 
-const update = async (id: string, data: UpdateLenderInput): Promise<ILender> => {
-    const lender = await Lender.findByIdAndUpdate(id, data, { new: true, runValidators: true });
+const update = async (id: string, data: UpdateLenderInput, adminId: string): Promise<ILender> => {
+    const lender = await Lender.findOneAndUpdate(
+        { _id: id, adminId: new mongoose.Types.ObjectId(adminId) },
+        data,
+        { new: true, runValidators: true }
+    );
     if (!lender) throw new NotFoundError("Lender");
     return lender;
 };
 
-const softDelete = async (id: string): Promise<ILender> => {
-    const lender = await Lender.findByIdAndUpdate(id, { isActive: false }, { new: true });
+const softDelete = async (id: string, adminId: string): Promise<ILender> => {
+    const lender = await Lender.findOneAndUpdate(
+        { _id: id, adminId: new mongoose.Types.ObjectId(adminId) },
+        { isActive: false },
+        { new: true }
+    );
     if (!lender) throw new NotFoundError("Lender");
     return lender;
 };
 
-const restore = async (id: string): Promise<ILender> => {
-    const lender = await Lender.findByIdAndUpdate(id, { isActive: true }, { new: true });
+const restore = async (id: string, adminId: string): Promise<ILender> => {
+    const lender = await Lender.findOneAndUpdate(
+        { _id: id, adminId: new mongoose.Types.ObjectId(adminId) },
+        { isActive: true },
+        { new: true }
+    );
     if (!lender) throw new NotFoundError("Lender");
     return lender;
 };
 
-const hardDelete = async (id: string): Promise<void> => {
-    const lender = await Lender.findById(id);
+const hardDelete = async (id: string, adminId: string): Promise<void> => {
+    const lender = await Lender.findOneAndDelete({ _id: id, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!lender) throw new NotFoundError("Lender");
-    await Lender.findByIdAndDelete(id);
 };
 
-const exportAll = async (query: { status?: string; search?: string; dateFrom?: string; dateTo?: string } = {}) => {
-    const filter: Record<string, unknown> = {};
-    if (query.status === "active")        filter.isActive = true;
+const exportAll = async (adminId: string, query: { status?: string; search?: string; dateFrom?: string; dateTo?: string } = {}) => {
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    const filter: Record<string, unknown> = { adminId: adminOid };
+    if (query.status === "active") filter.isActive = true;
     else if (query.status === "inactive") filter.isActive = false;
-    // if status === "all" or undefined, no filter
 
     if (query.search) {
         filter.$or = [
@@ -151,73 +162,49 @@ const exportAll = async (query: { status?: string; search?: string; dateFrom?: s
         ];
     }
 
-    // Build optional date filter for investment/repayment transactions
     const txDateFilter: Record<string, Date> = {};
     if (query.dateFrom) txDateFilter.$gte = new Date(query.dateFrom);
-    if (query.dateTo)   txDateFilter.$lte = new Date(new Date(query.dateTo).setHours(23, 59, 59, 999));
+    if (query.dateTo) txDateFilter.$lte = new Date(new Date(query.dateTo).setHours(23, 59, 59, 999));
     const hasDateFilter = Object.keys(txDateFilter).length > 0;
 
     const lenders = await Lender.find(filter).sort({ createdAt: -1 }).lean();
     const lenderIds = lenders.map(l => l._id);
 
-    const investMatch: Record<string, unknown> = { lender: { $in: lenderIds } };
-    const repayMatch:  Record<string, unknown> = { lender: { $in: lenderIds } };
+    const investMatch: Record<string, unknown> = { adminId: adminOid, lender: { $in: lenderIds } };
+    const repayMatch: Record<string, unknown> = { adminId: adminOid, lender: { $in: lenderIds } };
     if (hasDateFilter) { investMatch.date = txDateFilter; repayMatch.date = txDateFilter; }
 
     const [investAggs, principalAggs, profitAggs] = await Promise.all([
-        Investment.aggregate([
-            { $match: investMatch },
-            { $group: { _id: "$lender", totalBorrowed: { $sum: "$amountReceived" } } },
-        ]),
-        Repayment.aggregate([
-            { $match: { ...repayMatch, repaymentType: { $in: ["Principal", null] } } },
-            { $group: { _id: "$lender", totalRepaid: { $sum: "$amountPaid" } } },
-        ]),
-        Repayment.aggregate([
-            { $match: { ...repayMatch, repaymentType: "Profit" } },
-            { $group: { _id: "$lender", totalProfit: { $sum: "$amountPaid" } } },
-        ]),
+        Investment.aggregate([{ $match: investMatch }, { $group: { _id: "$lender", totalBorrowed: { $sum: "$amountReceived" } } }]),
+        Repayment.aggregate([{ $match: { ...repayMatch, repaymentType: { $in: ["Principal", null] } } }, { $group: { _id: "$lender", totalRepaid: { $sum: "$amountPaid" } } }]),
+        Repayment.aggregate([{ $match: { ...repayMatch, repaymentType: "Profit" } }, { $group: { _id: "$lender", totalProfit: { $sum: "$amountPaid" } } }]),
     ]);
 
-    const investMap = new Map(investAggs.map(a   => [a._id.toString(), a.totalBorrowed]));
-    const repayMap  = new Map(principalAggs.map(a => [a._id.toString(), a.totalRepaid]));
-    const profitMap = new Map(profitAggs.map(a   => [a._id.toString(), a.totalProfit]));
+    const investMap = new Map(investAggs.map(a => [a._id.toString(), a.totalBorrowed]));
+    const repayMap = new Map(principalAggs.map(a => [a._id.toString(), a.totalRepaid]));
+    const profitMap = new Map(profitAggs.map(a => [a._id.toString(), a.totalProfit]));
 
     return lenders.map(l => {
-        const totalBorrowed  = investMap.get(l._id.toString()) ?? 0;
-        const totalRepaid    = repayMap.get(l._id.toString())  ?? 0;
-        const totalProfit    = profitMap.get(l._id.toString()) ?? 0;
+        const totalBorrowed = investMap.get(l._id.toString()) ?? 0;
+        const totalRepaid = repayMap.get(l._id.toString()) ?? 0;
+        const totalProfit = profitMap.get(l._id.toString()) ?? 0;
         const balancePayable = totalBorrowed - totalRepaid;
         return {
-            lenderId: l.lenderId,
-            name:  l.name,
-            phone: l.phone || "",
-            address: l.address || "",
-            remarks: l.remarks || "",
-            totalBorrowed,
-            totalRepaid,
-            totalProfit,
-            balancePayable,
+            lenderId: l.lenderId, name: l.name, phone: l.phone || "", address: l.address || "",
+            remarks: l.remarks || "", totalBorrowed, totalRepaid, totalProfit, balancePayable,
             isActive: l.isActive,
-            // CSV-friendly aliases
-            "Lender ID": l.lenderId,
-            "Name": l.name,
-            "Phone": l.phone || "",
-            "Address": l.address || "",
-            "Remarks": l.remarks || "",
-            "Total Borrowed (Rs.)": totalBorrowed,
-            "Total Repaid (Rs.)": totalRepaid,
-            "Total Profit Paid (Rs.)": totalProfit,
-            "Balance Payable (Rs.)": balancePayable,
-            "Status": l.isActive !== false ? "Active" : "Inactive",
+            "Lender ID": l.lenderId, "Name": l.name, "Phone": l.phone || "", "Address": l.address || "",
+            "Remarks": l.remarks || "", "Total Borrowed (Rs.)": totalBorrowed,
+            "Total Repaid (Rs.)": totalRepaid, "Total Profit Paid (Rs.)": totalProfit,
+            "Balance Payable (Rs.)": balancePayable, "Status": l.isActive !== false ? "Active" : "Inactive",
         };
     });
 };
 
-const getStats = async (query: { status?: string; search?: string; dateFrom?: string; dateTo?: string } = {}) => {
-    // Build lender filter (same as exportAll)
-    const lenderFilter: Record<string, unknown> = {};
-    if (query.status === "active")       lenderFilter.isActive = true;
+const getStats = async (adminId: string, query: { status?: string; search?: string; dateFrom?: string; dateTo?: string } = {}) => {
+    const adminOid = new mongoose.Types.ObjectId(adminId);
+    const lenderFilter: Record<string, unknown> = { adminId: adminOid };
+    if (query.status === "active") lenderFilter.isActive = true;
     else if (query.status === "inactive") lenderFilter.isActive = false;
     if (query.search) {
         lenderFilter.$or = [
@@ -227,55 +214,42 @@ const getStats = async (query: { status?: string; search?: string; dateFrom?: st
         ];
     }
 
-    // Build date filter for investment/repayment transactions
     const txDateFilter: Record<string, Date> = {};
     if (query.dateFrom) txDateFilter.$gte = new Date(query.dateFrom);
-    if (query.dateTo)   txDateFilter.$lte = new Date(new Date(query.dateTo).setHours(23, 59, 59, 999));
+    if (query.dateTo) txDateFilter.$lte = new Date(new Date(query.dateTo).setHours(23, 59, 59, 999));
 
     const lenders = await Lender.find(lenderFilter).lean();
     const lenderIds = lenders.map(l => l._id);
 
-    const investMatch: Record<string, unknown> = { lender: { $in: lenderIds } };
-    const repayMatch:  Record<string, unknown> = { lender: { $in: lenderIds } };
-    if (Object.keys(txDateFilter).length) {
-        investMatch.date = txDateFilter;
-        repayMatch.date  = txDateFilter;
-    }
+    const investMatch: Record<string, unknown> = { adminId: adminOid, lender: { $in: lenderIds } };
+    const repayMatch: Record<string, unknown> = { adminId: adminOid, lender: { $in: lenderIds } };
+    if (Object.keys(txDateFilter).length) { investMatch.date = txDateFilter; repayMatch.date = txDateFilter; }
 
     const [investAggs, principalAggs, profitAggs] = await Promise.all([
-        Investment.aggregate([
-            { $match: investMatch },
-            { $group: { _id: "$lender", totalBorrowed: { $sum: "$amountReceived" } } },
-        ]),
-        Repayment.aggregate([
-            { $match: { ...repayMatch, repaymentType: { $in: ["Principal", null] } } },
-            { $group: { _id: "$lender", totalRepaid: { $sum: "$amountPaid" } } },
-        ]),
-        Repayment.aggregate([
-            { $match: { ...repayMatch, repaymentType: "Profit" } },
-            { $group: { _id: "$lender", totalProfit: { $sum: "$amountPaid" } } },
-        ]),
+        Investment.aggregate([{ $match: investMatch }, { $group: { _id: "$lender", totalBorrowed: { $sum: "$amountReceived" } } }]),
+        Repayment.aggregate([{ $match: { ...repayMatch, repaymentType: { $in: ["Principal", null] } } }, { $group: { _id: "$lender", totalRepaid: { $sum: "$amountPaid" } } }]),
+        Repayment.aggregate([{ $match: { ...repayMatch, repaymentType: "Profit" } }, { $group: { _id: "$lender", totalProfit: { $sum: "$amountPaid" } } }]),
     ]);
 
-    const investMap = new Map(investAggs.map(a   => [a._id.toString(), a.totalBorrowed]));
-    const repayMap  = new Map(principalAggs.map(a => [a._id.toString(), a.totalRepaid]));
-    const profitMap = new Map(profitAggs.map(a   => [a._id.toString(), a.totalProfit]));
+    const investMap = new Map(investAggs.map(a => [a._id.toString(), a.totalBorrowed]));
+    const repayMap = new Map(principalAggs.map(a => [a._id.toString(), a.totalRepaid]));
+    const profitMap = new Map(profitAggs.map(a => [a._id.toString(), a.totalProfit]));
 
     const enriched = lenders.map(l => ({
         ...l,
-        totalBorrowed:  investMap.get(l._id.toString()) ?? 0,
-        totalRepaid:    repayMap.get(l._id.toString())  ?? 0,
-        totalProfit:    profitMap.get(l._id.toString()) ?? 0,
+        totalBorrowed: investMap.get(l._id.toString()) ?? 0,
+        totalRepaid: repayMap.get(l._id.toString()) ?? 0,
+        totalProfit: profitMap.get(l._id.toString()) ?? 0,
         balancePayable: (investMap.get(l._id.toString()) ?? 0) - (repayMap.get(l._id.toString()) ?? 0),
     }));
 
-    const totalBorrowed  = enriched.reduce((s, l) => s + l.totalBorrowed,  0);
-    const totalRepaid    = enriched.reduce((s, l) => s + l.totalRepaid,    0);
-    const totalProfit    = enriched.reduce((s, l) => s + l.totalProfit,    0);
+    const totalBorrowed = enriched.reduce((s, l) => s + l.totalBorrowed, 0);
+    const totalRepaid = enriched.reduce((s, l) => s + l.totalRepaid, 0);
+    const totalProfit = enriched.reduce((s, l) => s + l.totalProfit, 0);
     const balancePayable = enriched.reduce((s, l) => s + l.balancePayable, 0);
-    const activeCount    = lenders.filter(l => l.isActive !== false).length;
-    const inactiveCount  = lenders.length - activeCount;
-    const paidOffCount   = enriched.filter(l => l.balancePayable <= 0).length;
+    const activeCount = lenders.filter(l => l.isActive !== false).length;
+    const inactiveCount = lenders.length - activeCount;
+    const paidOffCount = enriched.filter(l => l.balancePayable <= 0).length;
     return { totalLenders: lenders.length, totalBorrowed, totalRepaid, totalProfit, balancePayable, activeCount, inactiveCount, paidOffCount };
 };
 

@@ -1,16 +1,16 @@
-import { Request, Response, NextFunction } from "express";
+import { Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
+import mongoose from "mongoose";
 import { User } from "../models/user.model";
 import { apiResponse } from "../utils/api-response";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { ConflictError, NotFoundError, ForbiddenError } from "../utils/api-error";
 
-// GET /users — list all users (admin sees all; viewers cannot access this route)
-export const listUsers = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+// GET /users — admin lists their own viewers (scoped by adminId)
+export const listUsers = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const users = await User.find()
-            // passwordHash, refreshToken, passwordResetToken, passwordResetExpires
-            // are already excluded by select:false on the model — this is defensive extra exclusion
+        const adminId = new mongoose.Types.ObjectId(req.user!.userId);
+        const users = await User.find({ adminId, role: "viewer" })
             .select("_id username email role createdAt")
             .sort({ createdAt: -1 });
         res.status(200).json(apiResponse(200, "Users fetched", users));
@@ -19,8 +19,8 @@ export const listUsers = async (_req: Request, res: Response, next: NextFunction
     }
 };
 
-// POST /users — admin creates a viewer account
-export const createViewer = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+// POST /users — admin creates a viewer account scoped to themselves
+export const createViewer = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { username, email, password } = req.body as { username: string; email: string; password: string };
 
@@ -34,7 +34,9 @@ export const createViewer = async (req: Request, res: Response, next: NextFuncti
             username: username.toLowerCase(),
             email: email.toLowerCase(),
             passwordHash,
-            role: "viewer", // always viewer — admin cannot create another admin via this endpoint
+            role: "viewer",
+            // Scope the viewer to the requesting admin
+            adminId: new mongoose.Types.ObjectId(req.user!.userId),
         });
 
         res.status(201).json(
@@ -51,23 +53,19 @@ export const createViewer = async (req: Request, res: Response, next: NextFuncti
     }
 };
 
-// DELETE /users/:id — admin deletes a viewer account
+// DELETE /users/:id — admin deletes one of their own viewers
 export const deleteUser = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
 
-        // Prevent self-deletion
         if (id === req.user!.userId) {
             throw new ForbiddenError("You cannot delete your own account");
         }
 
-        const user = await User.findById(id);
+        const adminId = new mongoose.Types.ObjectId(req.user!.userId);
+        // Admin can only delete viewers that belong to them
+        const user = await User.findOne({ _id: id, adminId, role: "viewer" });
         if (!user) throw new NotFoundError("User");
-
-        // Cannot delete another admin
-        if (user.role === "admin") {
-            throw new ForbiddenError("Cannot delete an admin account");
-        }
 
         await User.findByIdAndDelete(id);
         res.status(200).json(apiResponse(200, "User deleted successfully"));
@@ -76,11 +74,12 @@ export const deleteUser = async (req: AuthRequest, res: Response, next: NextFunc
     }
 };
 
-// GET /users/:id — admin gets a single user
-export const getUserById = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+// GET /users/:id — admin gets one of their own viewers
+export const getUserById = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
-        const user = await User.findById(id).select("_id username email role createdAt");
+        const adminId = new mongoose.Types.ObjectId(req.user!.userId);
+        const user = await User.findOne({ _id: id, adminId }).select("_id username email role createdAt");
         if (!user) throw new NotFoundError("User");
         res.status(200).json(apiResponse(200, "User fetched successfully", user));
     } catch (error) {
@@ -88,52 +87,35 @@ export const getUserById = async (req: Request, res: Response, next: NextFunctio
     }
 };
 
-// PUT /users/:id — admin updates a user account (viewer or self)
+// PUT /users/:id — admin updates one of their own viewer accounts
 export const updateUser = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { id } = req.params;
-        const { username, email, password, role } = req.body as {
+        const { username, email, password } = req.body as {
             username?: string;
             email?: string;
             password?: string;
-            role?: "admin" | "viewer";
         };
 
-        const user = await User.findById(id);
+        const adminId = new mongoose.Types.ObjectId(req.user!.userId);
+        // Scope: admin can only update viewers that belong to them
+        const user = await User.findOne({ _id: id, adminId, role: "viewer" });
         if (!user) throw new NotFoundError("User");
 
-        // Security check: cannot modify another admin
-        if (user.role === "admin" && id !== req.user!.userId) {
-            throw new ForbiddenError("Cannot modify another admin account");
-        }
-
-        // Security check: cannot demote self from admin
-        if (id === req.user!.userId && role === "viewer" && user.role === "admin") {
-            throw new ForbiddenError("You cannot demote yourself from admin");
-        }
-
-        // Validate username uniqueness if changed
         if (username && username.toLowerCase() !== user.username) {
             const existing = await User.findOne({ username: username.toLowerCase() });
             if (existing) throw new ConflictError("Username is already in use");
             user.username = username.toLowerCase();
         }
 
-        // Validate email uniqueness if changed
         if (email && email.toLowerCase() !== user.email) {
             const existing = await User.findOne({ email: email.toLowerCase() });
             if (existing) throw new ConflictError("Email is already in use");
             user.email = email.toLowerCase();
         }
 
-        // Hash new password if provided and not empty
         if (password && password.trim() !== "") {
             user.passwordHash = await bcrypt.hash(password, 12);
-        }
-
-        // Update role if provided (and not self-demotion checked above)
-        if (role) {
-            user.role = role;
         }
 
         await user.save();
@@ -151,4 +133,3 @@ export const updateUser = async (req: AuthRequest, res: Response, next: NextFunc
         next(error);
     }
 };
-

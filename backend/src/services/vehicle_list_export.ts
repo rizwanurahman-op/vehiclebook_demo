@@ -29,9 +29,10 @@ const dSl = (s: string | null | undefined) => {
 };
 
 // ── Build MongoDB filter from query ─────────────────────────────────────────
-const buildFilter = (query: VehicleListExportQuery): Record<string, unknown> => {
+const buildFilter = (query: VehicleListExportQuery, adminId: string): Record<string, unknown> => {
     const { vehicleType, status, isFromExchange, search, dateFrom, dateTo } = query;
-    const filter: Record<string, unknown> = { isActive: true };
+    const mongoose = require("mongoose");
+    const filter: Record<string, unknown> = { isActive: true, adminId: new mongoose.Types.ObjectId(adminId) };
     if (vehicleType) filter.vehicleType = vehicleType;
     if (status) filter.status = status;
     if (isFromExchange === "true") filter.isFromExchange = true;
@@ -56,8 +57,8 @@ const buildFilter = (query: VehicleListExportQuery): Record<string, unknown> => 
 };
 
 // ── CSV Export ──────────────────────────────────────────────────────────────
-export const exportVehiclesCSV = async (query: VehicleListExportQuery): Promise<string> => {
-    const filter = buildFilter(query);
+export const exportVehiclesCSV = async (query: VehicleListExportQuery, adminId: string): Promise<string> => {
+    const filter = buildFilter(query, adminId);
     const vehicles = await Vehicle.find(filter)
         .sort({ datePurchased: -1 })
         .lean();
@@ -108,8 +109,8 @@ export const exportVehiclesCSV = async (query: VehicleListExportQuery): Promise<
 };
 
 // ── PDF Export ──────────────────────────────────────────────────────────────
-export const exportVehiclesPDF = async (query: VehicleListExportQuery): Promise<Buffer> => {
-    const filter = buildFilter(query);
+export const exportVehiclesPDF = async (query: VehicleListExportQuery, adminId: string): Promise<Buffer> => {
+    const filter = buildFilter(query, adminId);
     const vehicles = await Vehicle.find(filter)
         .sort({ datePurchased: -1 })
         .lean();

@@ -23,9 +23,10 @@ const dSl = (s: string | null | undefined) =>
     s ? s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "—";
 
 // ── Build MongoDB filter ─────────────────────────────────────────────────────
-const buildFilter = (query: PurchaseExportQuery): Record<string, unknown> => {
+const buildFilter = (query: PurchaseExportQuery, adminId: string): Record<string, unknown> => {
     const { vehicleType, paymentStatus, search, dateFrom, dateTo } = query;
-    const filter: Record<string, unknown> = { isActive: true };
+    const mongoose = require("mongoose");
+    const filter: Record<string, unknown> = { isActive: true, adminId: new mongoose.Types.ObjectId(adminId) };
     if (vehicleType) filter.vehicleType = vehicleType;
     if (paymentStatus && paymentStatus !== "all") filter.purchasePaymentStatus = paymentStatus;
     if (dateFrom || dateTo) {
@@ -57,8 +58,8 @@ const buildFilter = (query: PurchaseExportQuery): Record<string, unknown> => {
 };
 
 // ── CSV Export ──────────────────────────────────────────────────────────────
-export const exportPurchasesCSV = async (query: PurchaseExportQuery): Promise<string> => {
-    const filter = buildFilter(query);
+export const exportPurchasesCSV = async (query: PurchaseExportQuery, adminId: string): Promise<string> => {
+    const filter = buildFilter(query, adminId);
     const vehicles = await Vehicle.find(filter)
         .select("vehicleId vehicleType make model registrationNo purchasedFrom purchasedFromPhone datePurchased purchasePrice purchasePayments purchasePaymentStatus purchasePendingAmount totalInvestment status fundingSource")
         .sort({ datePurchased: -1 })
@@ -102,8 +103,8 @@ export const exportPurchasesCSV = async (query: PurchaseExportQuery): Promise<st
 };
 
 // ── PDF Export ──────────────────────────────────────────────────────────────
-export const exportPurchasesPDF = async (query: PurchaseExportQuery): Promise<Buffer> => {
-    const filter = buildFilter(query);
+export const exportPurchasesPDF = async (query: PurchaseExportQuery, adminId: string): Promise<Buffer> => {
+    const filter = buildFilter(query, adminId);
     const vehicles = await Vehicle.find(filter)
         .select("vehicleId vehicleType make model registrationNo purchasedFrom purchasedFromPhone datePurchased purchasePrice purchasePayments purchasePaymentStatus purchasePendingAmount totalInvestment status fundingSource")
         .sort({ datePurchased: -1 })

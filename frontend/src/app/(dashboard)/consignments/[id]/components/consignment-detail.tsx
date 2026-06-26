@@ -1125,6 +1125,14 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
     const VehicleIcon = vehicle.vehicleType === "two_wheeler" ? Bike : Car;
     const label = payeeLabel(vehicle);
 
+    // Exchange over-received: when exchange value > sold price
+    const exchangeBuyerPayments = vehicle.buyerPayments.filter(p => p.type === "exchange");
+    const totalExchangeValue = exchangeBuyerPayments.reduce((s, p) => s + p.amount, 0);
+    const cashBuyerPayments = vehicle.buyerPayments.filter(p => p.type !== "exchange");
+    const totalCashReceived = cashBuyerPayments.reduce((s, p) => s + p.amount, 0);
+    const isOverReceived = isSold && vehicle.soldPrice != null && vehicle.receivedAmount > vehicle.soldPrice;
+    const excessAmount = isOverReceived ? vehicle.receivedAmount - vehicle.soldPrice! : 0;
+
     const hasExchangeActivity = vehicle.isFromExchange ||
         vehicle.isExchange ||
         vehicle.buyerPayments.some(p => p.type === "exchange");
@@ -1259,6 +1267,7 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                             onClick={handleBuyerClick}
                             className={cn(
                                 "p-5 flex flex-col gap-2.5 transition-all duration-300 hover:bg-muted/20 cursor-pointer relative group bg-gradient-to-br from-card to-background/50",
+                                isOverReceived ? "hover:border-l-4 hover:border-l-amber-500" :
                                 vehicle.buyerBalance <= 0 ? "hover:border-l-4 hover:border-l-emerald-500" : "hover:border-l-4 hover:border-l-blue-500"
                             )}
                         >
@@ -1267,15 +1276,22 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                     <ArrowDownLeft className="h-3.5 w-3.5 text-success shrink-0" />
                                     Buyer Payment Progress
                                 </span>
-                                <span className="font-bold text-foreground bg-muted/60 px-2 py-0.5 rounded-md border border-border/40 font-mono text-[10px]">
-                                    {Math.min(100, Math.round((vehicle.receivedAmount / vehicle.soldPrice) * 100))}%
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                    {isOverReceived && (
+                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                                            Over-received
+                                        </span>
+                                    )}
+                                    <span className="font-bold text-foreground bg-muted/60 px-2 py-0.5 rounded-md border border-border/40 font-mono text-[10px]">
+                                        {Math.min(100, Math.round((vehicle.receivedAmount / vehicle.soldPrice) * 100))}%
+                                    </span>
+                                </div>
                             </div>
 
                             <div className="flex justify-between items-baseline mt-1">
                                 <p className="text-xl sm:text-2xl font-bold text-foreground">
-                                    {formatCurrency(vehicle.receivedAmount)}
-                                    <span className="text-xs font-normal text-muted-foreground ml-1">received of {formatCurrency(vehicle.soldPrice)}</span>
+                                    {formatCurrency(vehicle.soldPrice)}
+                                    <span className="text-xs font-normal text-muted-foreground ml-1">sold price</span>
                                 </p>
                                 <span className="text-[10px] text-success group-hover:translate-x-1 transition-transform flex items-center gap-0.5">
                                     {vehicle.buyerBalance <= 0 ? "View" : "Manage"} <ExternalLink className="h-2.5 w-2.5" />
@@ -1286,16 +1302,23 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                 <div
                                     className={cn(
                                         "h-full rounded-full transition-all duration-1000 ease-out shadow-sm",
-                                        vehicle.buyerBalance <= 0
-                                            ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
-                                            : "bg-gradient-to-r from-blue-500 to-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]"
+                                        isOverReceived
+                                            ? "bg-gradient-to-r from-amber-500 to-orange-400 shadow-[0_0_8px_rgba(245,158,11,0.4)]"
+                                            : vehicle.buyerBalance <= 0
+                                                ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                                                : "bg-gradient-to-r from-blue-500 to-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]"
                                     )}
                                     style={{ width: `${animateProgress ? Math.min(100, (vehicle.receivedAmount / vehicle.soldPrice) * 100) : 0}%` }}
                                 />
                             </div>
 
                             <div className="flex items-center mt-0.5">
-                                {vehicle.buyerBalance > 0 ? (
+                                {isOverReceived ? (
+                                    <p className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
+                                        <span className="animate-pulse h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                                        {formatCurrency(vehicle.receivedAmount)} received &middot; {formatCurrency(excessAmount)} excess exchange value
+                                    </p>
+                                ) : vehicle.buyerBalance > 0 ? (
                                     <p className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
                                         <span className="animate-pulse h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
                                         {formatCurrency(vehicle.buyerBalance)} outstanding from buyer
@@ -1606,6 +1629,11 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                             <AdminOnly>
                                 {vehicle.buyerBalance > 0 ? (
                                     <AddBuyerPaymentDialog vehicle={vehicle} />
+                                ) : isOverReceived ? (
+                                    <div className="flex items-center gap-1.5 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
+                                        <span className="text-sm">⚠️</span>
+                                        Over-received &middot; {formatCurrency(excessAmount)} excess
+                                    </div>
                                 ) : (
                                     <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
                                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd" /></svg>
@@ -1843,16 +1871,35 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                             <div className="p-5 space-y-5">
                                 {vehicle.soldPrice && (
                                     <div className="space-y-2">
+                                        {/* Over-received warning banner */}
+                                        {isOverReceived && (
+                                            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 flex items-start gap-3">
+                                                <span className="text-lg shrink-0">⚠️</span>
+                                                <div>
+                                                    <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-1">Exchange Value Exceeds Sold Price</p>
+                                                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                                        The exchange vehicle was valued at <strong className="text-orange-400">{formatCurrency(totalExchangeValue)}</strong>, which is{" "}
+                                                        <strong className="text-amber-400">{formatCurrency(excessAmount)} more</strong> than the sold price of{" "}
+                                                        <strong className="text-foreground">{formatCurrency(vehicle.soldPrice)}</strong>.
+                                                        This is an <strong className="text-amber-300">over-trade</strong> &mdash; the buyer received more trade-in credit than the vehicle&apos;s price.
+                                                        The sale is treated as fully settled. If any cash was paid back to the buyer, record it separately.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        )}
                                         <div className="flex justify-between text-sm">
                                             <span className="text-muted-foreground">Total Sold Price</span>
                                             <span className="font-bold text-foreground">{formatCurrency(vehicle.soldPrice)}</span>
                                         </div>
 
                                         {vehicle.buyerPayments.filter(p => p.type === "exchange").map(ep => (
-                                            <div key={ep._id} className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4">
+                                            <div key={ep._id} className={cn("rounded-xl border p-4", ep.amount > vehicle.soldPrice! ? "border-amber-500/30 bg-amber-500/5" : "border-orange-500/20 bg-orange-500/5")}>
                                                 <div className="flex items-center gap-2 mb-3">
                                                     <ArrowLeftRight className="h-3.5 w-3.5 text-orange-400" />
                                                     <p className="text-xs font-bold text-orange-400 uppercase tracking-widest">Exchange Vehicle</p>
+                                                    {ep.amount > vehicle.soldPrice! && (
+                                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25">Over-traded</span>
+                                                    )}
                                                     <p className="text-[10px] text-muted-foreground ml-auto">{formatDate(ep.date)}</p>
                                                 </div>
                                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
@@ -1866,7 +1913,14 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                                     </div>
                                                     <div>
                                                         <p className="text-[11px] text-muted-foreground mb-0.5">Exchange Value</p>
-                                                        <p className="font-bold text-orange-400">{formatCurrency(ep.amount)}</p>
+                                                        <p className={cn("font-bold", ep.amount > vehicle.soldPrice! ? "text-amber-400" : "text-orange-400")}>
+                                                            {formatCurrency(ep.amount)}
+                                                            {ep.amount > vehicle.soldPrice! && (
+                                                                <span className="ml-1.5 text-[10px] text-amber-400/70 font-normal">
+                                                                    ({formatCurrency(ep.amount - vehicle.soldPrice!)} over sold price)
+                                                                </span>
+                                                            )}
+                                                        </p>
                                                     </div>
                                                 </div>
                                                 {ep.exchangeCreatedRef && ep.exchangeCreatedIn ? (
@@ -1881,7 +1935,7 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                                     </div>
                                                 ) : (
                                                     <div className="mt-3 pt-3 border-t border-orange-500/10">
-                                                        <span className="text-[10px] text-muted-foreground italic">Not added to inventory — recorded for reference only</span>
+                                                        <span className="text-[10px] text-muted-foreground italic">Not added to inventory &mdash; recorded for reference only</span>
                                                     </div>
                                                 )}
                                             </div>
@@ -1894,28 +1948,53 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                             ) : (
                                                 vehicle.buyerPayments.filter(p => p.type !== "exchange").map((cp, i) => (
                                                     <div key={cp._id} className="flex justify-between text-sm">
-                                                        <span className="text-muted-foreground">Payment {i + 1} ({cp.mode}) · {formatDate(cp.date)}</span>
+                                                        <span className="text-muted-foreground">Payment {i + 1} ({cp.mode}) &middot; {formatDate(cp.date)}</span>
                                                         <span className="font-semibold text-emerald-400">{formatCurrency(cp.amount)}</span>
                                                     </div>
                                                 ))
                                             )}
                                         </div>
 
-                                        <div className="flex justify-between items-center pt-2 border-t-2 border-border font-bold text-sm">
-                                            <span className="text-foreground">Remaining Balance</span>
-                                            <span className={vehicle.buyerBalance > 0 ? "text-red-400" : "text-emerald-400"}>
-                                                {formatCurrency(vehicle.buyerBalance)}
-                                                {vehicle.buyerBalance <= 0 && <span className="ml-2 text-[11px]">✓ Fully settled</span>}
-                                            </span>
+                                        {/* Settlement summary rows */}
+                                        <div className="space-y-1.5 pt-2 border-t-2 border-border">
+                                            <div className="flex justify-between items-center text-sm">
+                                                <span className="text-muted-foreground">Total Exchange Value</span>
+                                                <span className={cn("font-semibold", isOverReceived ? "text-amber-400" : "text-orange-400")}>{formatCurrency(totalExchangeValue)}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center text-sm">
+                                                <span className="text-muted-foreground">Total Cash Received</span>
+                                                <span className="font-semibold text-emerald-400">{formatCurrency(totalCashReceived)}</span>
+                                            </div>
+                                            <div className="flex justify-between items-center font-bold text-sm border-t border-border pt-1.5">
+                                                <span className="text-foreground">{isOverReceived ? "Settlement Status" : "Remaining Balance"}</span>
+                                                <span className={isOverReceived ? "text-amber-400" : vehicle.buyerBalance > 0 ? "text-red-400" : "text-emerald-400"}>
+                                                    {isOverReceived ? (
+                                                        <span className="flex items-center gap-1">
+                                                            <span>✓ Settled</span>
+                                                            <span className="text-[10px] font-normal text-amber-400/70">(+{formatCurrency(excessAmount)} excess)</span>
+                                                        </span>
+                                                    ) : (
+                                                        <span>
+                                                            {formatCurrency(vehicle.buyerBalance)}
+                                                            {vehicle.buyerBalance <= 0 && <span className="ml-2 text-[11px]">✓ Fully settled</span>}
+                                                        </span>
+                                                    )}
+                                                </span>
+                                            </div>
                                         </div>
                                         {vehicle.soldPrice > 0 && (
                                             <div>
                                                 <div className="h-2 bg-muted/40 rounded-full overflow-hidden">
-                                                    <div className="h-full bg-gradient-to-r from-orange-500 to-emerald-500 rounded-full"
-                                                        style={{ width: `${Math.min(100, (vehicle.receivedAmount / vehicle.soldPrice) * 100)}%` }} />
+                                                    <div
+                                                        className={cn("h-full rounded-full", isOverReceived ? "bg-gradient-to-r from-amber-500 to-orange-400" : "bg-gradient-to-r from-orange-500 to-emerald-500")}
+                                                        style={{ width: `${Math.min(100, (vehicle.receivedAmount / vehicle.soldPrice) * 100)}%` }}
+                                                    />
                                                 </div>
                                                 <p className="text-[10px] text-muted-foreground mt-1">
-                                                    {((vehicle.receivedAmount / vehicle.soldPrice) * 100).toFixed(0)}% of total received (exchange + cash)
+                                                    {isOverReceived
+                                                        ? `100% settled &middot; ${formatCurrency(excessAmount)} over-traded`
+                                                        : `${((vehicle.receivedAmount / vehicle.soldPrice) * 100).toFixed(0)}% of total received (exchange + cash)`
+                                                    }
                                                 </p>
                                             </div>
                                         )}
