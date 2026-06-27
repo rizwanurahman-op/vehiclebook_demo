@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import {
     TrendingUp, TrendingDown, Store, CreditCard, Clock, AlertCircle,
     Loader2, Download, FileText, FileSpreadsheet, ChevronDown, BarChart3,
-    DollarSign, Package, Calendar, X, Filter, ArrowUpRight, ArrowDownLeft,
+    DollarSign, Package, Calendar, X, Filter, ArrowUpRight, ArrowDownLeft, RefreshCw
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -144,6 +144,7 @@ export const ConsignmentReports = () => {
         : 0;
     const buyerBalance    = report?.openSettlements.reduce((s, v) => s + (v.buyerBalance || 0), 0) ?? 0;
     const payeeBalance    = report?.openSettlements.reduce((s, v) => s + (v.payeeBalance || 0), 0) ?? 0;
+    const buyerCashBack   = report?.openSettlements.reduce((s, v) => s + (v.buyerCashBackBalance || 0), 0) ?? 0;
 
     // ── Client-side pagination slices ────────────────────────────────
     const settlePaged = (report?.openSettlements ?? []).slice((settlePage - 1) * RPT_PAGE_SIZE, settlePage * RPT_PAGE_SIZE);
@@ -320,9 +321,14 @@ export const ConsignmentReports = () => {
                                         <ArrowUpRight className="h-3 w-3" />Buyer owes {formatCurrency(buyerBalance)}
                                     </span>
                                 )}
+                                {buyerCashBack > 0 && (
+                                    <span className="text-xs font-semibold text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                        <RefreshCw className="h-3 w-3" />We owe CB {formatCurrency(buyerCashBack)}
+                                    </span>
+                                )}
                                 {payeeBalance > 0 && (
                                     <span className="text-xs font-semibold text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                        <ArrowDownLeft className="h-3 w-3" />We owe {formatCurrency(payeeBalance)}
+                                        <ArrowDownLeft className="h-3 w-3" />We owe Owner/Finance {formatCurrency(payeeBalance)}
                                     </span>
                                 )}
                             </div>
@@ -331,7 +337,7 @@ export const ConsignmentReports = () => {
                                     <table className="w-full text-sm min-w-[600px]">
                                         <thead>
                                             <tr className="border-b border-orange-500/20 bg-orange-500/5">
-                                                {["Vehicle", "Reg. No.", "Owner", "Sale Type", "Sold", "Buyer Owes", "We Owe", "Settlement"].map(h => (
+                                                {["Vehicle", "Reg. No.", "Owner", "Sale Type", "Sold", "Buyer Bal / CB", "We Owe", "Settlement"].map(h => (
                                                     <th key={h} className="px-4 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
                                                 ))}
                                             </tr>
@@ -351,7 +357,15 @@ export const ConsignmentReports = () => {
                                                         </span>
                                                     </td>
                                                     <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatDate(v.dateSold!)}</td>
-                                                    <td className="px-4 py-3 text-sm font-bold text-amber-400 whitespace-nowrap">{(v.buyerBalance || 0) > 0 ? formatCurrency(v.buyerBalance) : "—"}</td>
+                                                    <td className="px-4 py-3 text-sm font-bold whitespace-nowrap">
+                                                        {(v.buyerCashBackBalance ?? 0) > 0 ? (
+                                                            <span className="text-violet-400">-{formatCurrency(v.buyerCashBackBalance ?? 0)} <span className="text-[10px] font-normal">(CB)</span></span>
+                                                        ) : (v.buyerBalance || 0) > 0 ? (
+                                                            <span className="text-amber-400">{formatCurrency(v.buyerBalance)}</span>
+                                                        ) : (
+                                                            <span className="text-emerald-400/80 font-normal">Settled</span>
+                                                        )}
+                                                    </td>
                                                     <td className="px-4 py-3 text-sm font-bold text-blue-400 whitespace-nowrap">{(v.payeeBalance || 0) > 0 ? formatCurrency(v.payeeBalance) : "—"}</td>
                                                      <td className="px-4 py-3 whitespace-nowrap">
                                                         {{

@@ -15,7 +15,7 @@ import {
     ShoppingCart, Search, Eye,
     CheckCircle2, Clock, AlertTriangle, IndianRupee, Wallet, Ban,
     TrendingUp, User, Calendar, X,
-    Download, FileText, FileSpreadsheet, Loader2, ChevronDown
+    Download, FileText, FileSpreadsheet, Loader2, ChevronDown, ArrowLeftRight
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -70,6 +70,7 @@ interface PurchaseVehicle {
     totalInvestment: number;
     status: string;
     fundingSource: string;
+    isFromExchange: boolean;
 }
 
 interface PurchaseRegisterData {
@@ -81,7 +82,14 @@ interface PurchaseRegisterData {
 }
 
 // ── Sub-components ─────────────────────────────────────────────────
-const PaymentStatusBadge = ({ status }: { status: PurchaseVehicle["purchasePaymentStatus"] }) => {
+const PaymentStatusBadge = ({ status, isFromExchange }: { status: PurchaseVehicle["purchasePaymentStatus"]; isFromExchange?: boolean }) => {
+    if (status === "paid" && isFromExchange) {
+        return (
+            <Badge className="bg-orange-500/10 text-orange-400 border-orange-500/20 text-[10px] gap-1">
+                <ArrowLeftRight className="h-2.5 w-2.5" />Via Exchange
+            </Badge>
+        );
+    }
     if (status === "paid") {
         return (
             <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px] gap-1">
@@ -461,12 +469,19 @@ const PurchasesList = () => {
                                             </span>
                                             {formatDate(v.datePurchased)}
                                         </div>
-                                        <PaymentStatusBadge status={v.purchasePaymentStatus} />
+                                        <PaymentStatusBadge status={v.purchasePaymentStatus} isFromExchange={v.isFromExchange} />
                                     </div>
 
                                     {/* Vehicle & Seller */}
                                     <div className="relative mb-5 flex flex-col items-start">
-                                        <p className="text-lg font-bold text-foreground tracking-tight leading-none mb-1.5 group-hover:text-primary transition-colors">{v.make} {v.model}</p>
+                                        <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                                            <p className="text-lg font-bold text-foreground tracking-tight leading-none group-hover:text-primary transition-colors">{v.make} {v.model}</p>
+                                            {v.isFromExchange && (
+                                                <Badge className="bg-orange-500/10 text-orange-400 border-orange-500/20 text-[9px] gap-0.5 px-1.5 py-0">
+                                                    <ArrowLeftRight className="h-2 w-2" />Exchange In
+                                                </Badge>
+                                            )}
+                                        </div>
                                         <p className="text-[11px] font-medium text-muted-foreground mb-3">REG: <span className="text-foreground">{v.registrationNo}</span></p>
                                         
                                         <div className="inline-flex items-center gap-2 rounded-lg bg-muted/40 px-2.5 py-1.5 border border-border/50">
@@ -567,8 +582,15 @@ const PurchasesList = () => {
                                                 {formatDate(v.datePurchased)}
                                             </td>
                                             <td className="px-4 py-3 min-w-[160px]">
-                                                <p className="font-semibold text-foreground">{v.make} {v.model}</p>
-                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                                                    <p className="font-semibold text-foreground">{v.make} {v.model}</p>
+                                                    {v.isFromExchange && (
+                                                        <Badge className="bg-orange-500/10 text-orange-400 border-orange-500/20 text-[9px] gap-0.5 px-1.5 py-0">
+                                                            <ArrowLeftRight className="h-2 w-2" />Exchange In
+                                                        </Badge>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
                                                     <p className="text-[11px] text-muted-foreground font-mono">{v.registrationNo}</p>
                                                     <span className="text-[10px] text-muted-foreground/50">{v.vehicleId}</span>
                                                 </div>
@@ -599,7 +621,7 @@ const PurchasesList = () => {
                                                 </span>
                                             </td>
                                             <td className="px-4 py-3 text-center">
-                                                <PaymentStatusBadge status={v.purchasePaymentStatus} />
+                                                <PaymentStatusBadge status={v.purchasePaymentStatus} isFromExchange={v.isFromExchange} />
                                             </td>
                                             <td className="px-4 py-3 text-center">
                                                 <Link href={`/vehicles/${v._id}`}>

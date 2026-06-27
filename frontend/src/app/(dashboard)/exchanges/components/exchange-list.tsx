@@ -52,6 +52,10 @@ interface ExchangeDeal {
     sourceTotalReceived: number;
     sourceRemainingBalance: number;
     isFullySettled: boolean;
+
+    buyerCashBackDue?: number;
+    buyerCashBackPaid?: number;
+    buyerCashBackBalance?: number;
 }
 
 interface ExchangeStats {
@@ -192,8 +196,12 @@ const ExchangeCell = ({ deal }: { deal: ExchangeDeal }) => {
 
 // ── Settlement Cell ───────────────────────────────────────────────────────────
 const SettlementCell = ({ deal }: { deal: ExchangeDeal }) => {
+    const hasCashBack = (deal.buyerCashBackBalance ?? 0) > 0;
+    
+    // Effective received capped at sold price
+    const effectiveReceived = Math.min(deal.sourceTotalReceived, deal.sourceSoldPrice);
     const pct = deal.sourceSoldPrice > 0
-        ? Math.min(100, (deal.sourceTotalReceived / deal.sourceSoldPrice) * 100)
+        ? Math.min(100, (effectiveReceived / deal.sourceSoldPrice) * 100)
         : 0;
 
     return (
@@ -202,6 +210,10 @@ const SettlementCell = ({ deal }: { deal: ExchangeDeal }) => {
                 {deal.isFullySettled ? (
                     <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px] gap-1">
                         <CheckCircle2 className="h-2.5 w-2.5" />Settled
+                    </Badge>
+                ) : hasCashBack ? (
+                    <Badge className="bg-violet-500/10 text-violet-400 border-violet-500/20 text-[10px] gap-1">
+                        <RefreshCw className="h-2.5 w-2.5 mr-1" />Cash-Back Due
                     </Badge>
                 ) : (
                     <Badge className="bg-orange-500/10 text-orange-400 border-orange-500/20 text-[10px] gap-1">
@@ -226,10 +238,19 @@ const SettlementCell = ({ deal }: { deal: ExchangeDeal }) => {
                 )}
                 <div className="flex justify-between font-bold border-t border-border/60 pt-1">
                     <span className="text-muted-foreground">Balance</span>
+                    {hasCashBack ? (
+                        <span className="text-violet-400 font-mono">
+                            -{formatINR(deal.buyerCashBackBalance || 0)}
+                        </span>
+                    ) : (
                         <span className={deal.sourceRemainingBalance > 0 ? "text-red-400 font-mono" : "text-emerald-400 font-mono"}>
                             {formatINR(deal.sourceRemainingBalance)}
-                    </span>
+                        </span>
+                    )}
                 </div>
+                {hasCashBack && (
+                    <p className="text-[9px] text-violet-400/80 text-right mt-0.5">cash-back owed</p>
+                )}
             </div>
             <div className="mt-2 h-1.5 bg-muted/40 rounded-full overflow-hidden">
                 <div
@@ -496,6 +517,10 @@ export default function ExchangeList() {
                                     {deal.isFullySettled ? (
                                         <Badge className="bg-emerald-500/10 text-emerald-400 text-[10px] gap-1">
                                             <CheckCircle2 className="h-2.5 w-2.5" />Fully Settled
+                                        </Badge>
+                                    ) : (deal.buyerCashBackBalance ?? 0) > 0 ? (
+                                        <Badge className="bg-violet-500/10 text-violet-400 text-[10px] gap-1">
+                                            <RefreshCw className="h-2.5 w-2.5 animate-spin-slow" />Cash-Back Due · -{formatINR(deal.buyerCashBackBalance ?? 0)}
                                         </Badge>
                                     ) : deal.sourceRemainingBalance > 0 ? (
                                         <Badge className="bg-orange-500/10 text-orange-400 text-[10px] gap-1">

@@ -41,7 +41,7 @@ export interface IVehicle extends Omit<Document, 'model'> {
         _id: mongoose.Types.ObjectId;
         date: Date;
         amount: number;
-        mode: "Cash" | "Online" | "Cheque" | "UPI" | "Bank Transfer";
+        mode: "Cash" | "Online" | "Cheque" | "UPI" | "Bank Transfer" | "Exchange";
         bankAccount?: string;
         notes?: string;
     }>;
@@ -53,7 +53,7 @@ export interface IVehicle extends Omit<Document, 'model'> {
     soldPrice?: number;
     soldTo?: string;
     soldToPhone?: string;
-    saleStatus: "fully_received" | "balance_pending" | "noc_pending" | "noc_cash_pending" | null;
+    saleStatus: "fully_received" | "balance_pending" | "noc_pending" | "noc_cash_pending" | "cashback_pending" | null;
     isExchange: boolean;
     isFromExchange: boolean;
     exchangeVehicleRef?: mongoose.Types.ObjectId;
@@ -83,6 +83,17 @@ export interface IVehicle extends Omit<Document, 'model'> {
     }>;
     receivedAmount: number;
     balanceAmount: number;
+    // Cash-back tracking (when exchange value > sold price, shop owes buyer the difference)
+    buyerCashBackPayments: Array<{
+        _id: mongoose.Types.ObjectId;
+        date: Date;
+        amount: number;
+        mode: "Cash" | "Online" | "Cheque" | "UPI" | "GPay" | "Bank Transfer";
+        notes?: string;
+    }>;
+    buyerCashBackDue: number;      // max(0, receivedAmount - soldPrice)
+    buyerCashBackPaid: number;     // sum of buyerCashBackPayments
+    buyerCashBackBalance: number;  // buyerCashBackDue - buyerCashBackPaid
     profitLoss: number;
     profitLossPercentage: number;
     daysToSell: number | null;
@@ -103,7 +114,7 @@ const CostBreakdownSchema = new Schema({
 const PurchasePaymentSchema = new Schema({
     date: { type: Date, required: true },
     amount: { type: Number, required: true, min: 0 },
-    mode: { type: String, enum: ["Cash", "Online", "Cheque", "UPI", "Bank Transfer"], required: true },
+    mode: { type: String, enum: ["Cash", "Online", "Cheque", "UPI", "Bank Transfer", "Exchange"], required: true },
     bankAccount: String,
     notes: String,
 }, { _id: true });
@@ -184,7 +195,7 @@ const VehicleSchema = new Schema<IVehicle>({
     soldPrice: Number,
     soldTo: String,
     soldToPhone: String,
-    saleStatus: { type: String, enum: ["fully_received", "balance_pending", "noc_pending", "noc_cash_pending", null], default: null },
+    saleStatus: { type: String, enum: ["fully_received", "balance_pending", "noc_pending", "noc_cash_pending", "cashback_pending", null], default: null },
     isExchange: { type: Boolean, default: false },
     isFromExchange: { type: Boolean, default: false },
     exchangeVehicleRef: { type: Schema.Types.ObjectId, ref: "Vehicle" },
@@ -198,6 +209,16 @@ const VehicleSchema = new Schema<IVehicle>({
     salePayments: { type: [SalePaymentSchema], default: [] },
     receivedAmount: { type: Number, default: 0 },
     balanceAmount: { type: Number, default: 0 },
+    // Cash-back tracking
+    buyerCashBackPayments: { type: [new Schema({
+        date: { type: Date, required: true },
+        amount: { type: Number, required: true, min: 0 },
+        mode: { type: String, enum: ["Cash", "Online", "Cheque", "UPI", "GPay", "Bank Transfer"], required: true },
+        notes: String,
+    }, { _id: true })], default: [] },
+    buyerCashBackDue: { type: Number, default: 0 },
+    buyerCashBackPaid: { type: Number, default: 0 },
+    buyerCashBackBalance: { type: Number, default: 0 },
     profitLoss: { type: Number, default: 0 },
     profitLossPercentage: { type: Number, default: 0 },
     daysToSell: { type: Number, default: null },
@@ -260,6 +281,11 @@ VehicleSchema.pre("save", function (next) {
     this.receivedAmount = this.salePayments.reduce((s, p) => s + p.amount, 0);
     this.balanceAmount = Math.max(0, (this.soldPrice || 0) - this.receivedAmount);
 
+    // 3a. Cash-back tracking (over-trade: exchange value > sold price)
+    this.buyerCashBackDue = Math.max(0, this.receivedAmount - (this.soldPrice || 0));
+    this.buyerCashBackPaid = (this.buyerCashBackPayments || []).reduce((s, p) => s + p.amount, 0);
+    this.buyerCashBackBalance = Math.max(0, this.buyerCashBackDue - this.buyerCashBackPaid);
+
     // 3b. Finance status — aggregate from Finance-mode payments
     const financePayments = this.salePayments.filter(p => p.mode === "Finance");
     const totalFinanceDisbursed = financePayments.reduce((s, p) => s + p.amount, 0);
@@ -288,7 +314,8 @@ VehicleSchema.pre("save", function (next) {
     if (this.dateSold && this.soldPrice) {
         const nocPending = this.nocStatus === "pending" || this.nocStatus === "submitted";
         const balPending = this.balanceAmount > 0;
-        if (!nocPending && !balPending) {
+        const cashBackPending = this.buyerCashBackBalance > 0;
+        if (!nocPending && !balPending && !cashBackPending) {
             this.saleStatus = "fully_received";
             this.status = "sold";
         } else if (nocPending && balPending) {
@@ -296,6 +323,9 @@ VehicleSchema.pre("save", function (next) {
             this.status = "sold_pending";
         } else if (nocPending) {
             this.saleStatus = "noc_pending";
+            this.status = "sold_pending";
+        } else if (cashBackPending) {
+            this.saleStatus = "cashback_pending";
             this.status = "sold_pending";
         } else {
             this.saleStatus = "balance_pending";

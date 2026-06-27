@@ -260,6 +260,109 @@ const AddPurchasePaymentDialog = ({ vehicle }: { vehicle: IVehicle }) => {
     );
 };
 
+// ── Record Cash-Back Payment Dialog ──────────────────────────────
+// Used when exchange value > sold price: shop pays back the difference to buyer
+const RecordCashBackDialog = ({ vehicle }: { vehicle: IVehicle }) => {
+    const [open, setOpen] = useState(false);
+    const [tid, setTid] = useState<string | number | undefined>();
+    const queryClient = useQueryClient();
+    const cashBackDue = vehicle.buyerCashBackDue ?? 0;
+    const cashBackBalance = vehicle.buyerCashBackBalance ?? cashBackDue;
+
+    const form = useForm({
+        defaultValues: {
+            date: new Date().toISOString().split("T")[0],
+            amount: cashBackBalance,
+            mode: "Cash" as "Cash" | "Online" | "Cheque" | "UPI" | "GPay" | "Bank Transfer",
+            notes: "",
+        },
+    });
+
+    const { mutate, isPending } = useMutation({
+        mutationFn: async (values: { date: string; amount: number; mode: string; notes: string }) => {
+            setTid(toast.loading("Recording cash-back payment..."));
+            return axios.post(`/vehicles/${vehicle._id}/buyer-cashback-payments`, values);
+        },
+        onSuccess: () => {
+            toast.success("Cash-back payment recorded!", { id: tid });
+            queryClient.invalidateQueries({ queryKey: ["vehicle", vehicle._id] });
+            queryClient.invalidateQueries({ queryKey: ["vehicles"] });
+            form.reset({ date: new Date().toISOString().split("T")[0], amount: 0, mode: "Cash", notes: "" });
+            setOpen(false);
+        },
+        onError: (err: unknown) => {
+            const e = (err as AxiosError)?.response?.data as ErrorData;
+            toast.error("Error!", { id: tid, description: e?.message || "Failed to record payment" });
+        },
+    });
+
+    return (
+        <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset(); }}>
+            <DialogTrigger asChild>
+                <Button size="sm" variant="outline" className="border-amber-500/40 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300 cursor-pointer">
+                    <IndianRupee className="mr-1.5 h-3.5 w-3.5" /> Pay Cash-Back to Buyer
+                </Button>
+            </DialogTrigger>
+            <DialogContent className="w-[96vw] max-w-sm p-0 overflow-hidden rounded-2xl bg-card border-border">
+                <div className="relative p-5 bg-amber-500/5 border-b border-amber-500/20">
+                    <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 border border-amber-500/30">
+                            <IndianRupee className="h-5 w-5 text-amber-400" />
+                        </div>
+                        <div>
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="text-[10px] font-bold tracking-widest text-amber-400 uppercase">Over-trade</span>
+                            </div>
+                            <DialogTitle className="text-base font-bold text-foreground">Pay Cash-Back to Buyer</DialogTitle>
+                            <DialogDescription className="text-xs text-muted-foreground">
+                                Due: {formatCurrency(cashBackBalance)} remaining
+                            </DialogDescription>
+                        </div>
+                    </div>
+                </div>
+                <div className="p-5 space-y-4">
+                    <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-3 text-xs text-amber-400/80 leading-relaxed">
+                        Exchange value exceeded sold price by <strong className="text-amber-400">{formatCurrency(cashBackDue)}</strong>.
+                        Record each payment you return to the buyer here.
+                    </div>
+                    <div className="space-y-3">
+                        <div>
+                            <label className="text-xs font-semibold text-foreground block mb-1">Date <span className="text-destructive">*</span></label>
+                            <Input type="date" className="h-9 bg-muted/50 border-border text-sm" {...form.register("date")} />
+                        </div>
+                        <div>
+                            <label className="text-xs font-semibold text-foreground block mb-1">Amount ₹ <span className="text-destructive">*</span></label>
+                            <div className="relative">
+                                <IndianRupee className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                                <Input type="number" min="1" max={cashBackBalance} className="h-9 bg-muted/50 border-border pl-7 text-sm"
+                                    {...form.register("amount", { valueAsNumber: true })} />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="text-xs font-semibold text-foreground block mb-1">Payment Mode <span className="text-destructive">*</span></label>
+                            <select className="h-9 w-full rounded-md border border-border bg-muted/50 px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                                {...form.register("mode")}>
+                                {["Cash", "UPI", "GPay", "Online", "Bank Transfer", "Cheque"].map(m => (
+                                    <option key={m} value={m}>{m}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-xs font-semibold text-foreground block mb-1">Notes</label>
+                            <Input className="h-9 bg-muted/50 border-border text-sm" placeholder="Optional" {...form.register("notes")} />
+                        </div>
+                    </div>
+                    <Button onClick={form.handleSubmit((v) => mutate(v))} disabled={isPending}
+                        className="w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold cursor-pointer">
+                        {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                        Record ₹{form.watch("amount") ? Number(form.watch("amount")).toLocaleString("en-IN") : 0} Cash-Back
+                    </Button>
+                </div>
+            </DialogContent>
+        </Dialog>
+    );
+};
+
 // ── Add Sale Payment Dialog — Unified Payment Method ──────────────
 const AddSalePaymentDialog = ({ vehicle }: { vehicle: IVehicle }) => {
     const [open, setOpen] = useState(false);
@@ -1264,8 +1367,9 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
     });
 
     const { mutate: deletePayment } = useMutation({
-        mutationFn: async ({ type, paymentId }: { type: "purchase" | "sale"; paymentId: string }) => {
-            return axios.delete(`/vehicles/${id}/${type === "purchase" ? "purchase-payments" : "sale-payments"}/${paymentId}`);
+        mutationFn: async ({ type, paymentId }: { type: "purchase" | "sale" | "cashback"; paymentId: string }) => {
+            const path = type === "purchase" ? "purchase-payments" : type === "cashback" ? "buyer-cashback-payments" : "sale-payments";
+            return axios.delete(`/vehicles/${id}/${path}/${paymentId}`);
         },
         onSuccess: () => {
             toast.success("Payment deleted");
@@ -1303,8 +1407,13 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
     const totalExchangeValue = exchangePayments.reduce((s, p) => s + p.amount, 0);
     const cashPayments = vehicle.salePayments.filter(p => p.type !== "exchange");
     const totalCashReceived = cashPayments.reduce((s, p) => s + p.amount, 0);
-    const isOverReceived = isSold && vehicle.soldPrice != null && vehicle.receivedAmount > vehicle.soldPrice;
-    const excessAmount = isOverReceived ? vehicle.receivedAmount - vehicle.soldPrice! : 0;
+    // Use backend-computed values; fall back to frontend calculation for legacy docs
+    const cashBackDue = vehicle.buyerCashBackDue ?? Math.max(0, vehicle.receivedAmount - (vehicle.soldPrice ?? 0));
+    const cashBackPaid = vehicle.buyerCashBackPaid ?? 0;
+    const cashBackBalance = vehicle.buyerCashBackBalance ?? Math.max(0, cashBackDue - cashBackPaid);
+    const isOverReceived = isSold && cashBackDue > 0;  // any over-trade situation
+    const isCashBackPending = isOverReceived && cashBackBalance > 0; // shop still owes buyer
+    const excessAmount = cashBackDue; // total over-trade amount (for display)
 
     const hasExchangeActivity = vehicle.isExchange || vehicle.isFromExchange ||
         vehicle.salePayments.some(p => p.type === "exchange");
@@ -1537,10 +1646,15 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                             </span>
                             <div className="flex items-center gap-1.5">
                                 {isOverReceived && (
-                                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25">
-                                        Over-received
-                                    </span>
-                                )}
+                                <span className={cn(
+                                    "text-[9px] font-bold px-1.5 py-0.5 rounded-full border",
+                                    isCashBackPending
+                                        ? "bg-red-500/15 text-red-400 border-red-500/25"
+                                        : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"
+                                )}>
+                                    {isCashBackPending ? `Cash-Back Due` : `Over-trade Settled`}
+                                </span>
+                            )}
                                 <span className="font-bold text-foreground bg-muted/60 px-2 py-0.5 rounded-md border border-border/40 font-mono text-[10px]">
                                     {isSold ? `${salePct.toFixed(0)}%` : "N/A"}
                                 </span>
@@ -1569,11 +1683,13 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                     "h-full rounded-full transition-all duration-1000 ease-out shadow-sm",
                                     !isSold
                                         ? "bg-muted/30"
-                                        : isOverReceived
-                                            ? "bg-gradient-to-r from-amber-500 to-orange-400 shadow-[0_0_8px_rgba(245,158,11,0.4)]"
-                                            : salePct === 100
+                                        : isCashBackPending
+                                            ? "bg-gradient-to-r from-red-500 to-orange-400 shadow-[0_0_8px_rgba(239,68,68,0.4)]"
+                                            : isOverReceived
                                                 ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
-                                                : "bg-gradient-to-r from-blue-500 to-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]"
+                                                : salePct === 100
+                                                    ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                                                    : "bg-gradient-to-r from-blue-500 to-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]"
                                 )}
                                 style={{ width: `${animateProgress ? (isSold ? salePct : 0) : 0}%` }}
                             />
@@ -1581,10 +1697,15 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
 
                         <div className="flex items-center justify-between mt-0.5">
                             {isSold ? (
-                                isOverReceived ? (
-                                    <p className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
-                                        <span className="animate-pulse h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
-                                        {formatCurrency(vehicle.receivedAmount)} received · {formatCurrency(excessAmount)} excess exchange value
+                                isCashBackPending ? (
+                                    <p className="text-[10px] text-red-400 font-medium flex items-center gap-1">
+                                        <span className="animate-pulse h-1.5 w-1.5 rounded-full bg-red-400 shrink-0" />
+                                        {formatCurrency(cashBackBalance)} cash-back still owed to buyer · {formatCurrency(cashBackPaid > 0 ? cashBackPaid : 0)} paid so far
+                                    </p>
+                                ) : isOverReceived ? (
+                                    <p className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+                                        Over-trade fully settled &mdash; {formatCurrency(excessAmount)} cash-back paid to buyer
                                     </p>
                                 ) : vehicle.balanceAmount > 0 ? (
                                     <p className="text-[10px] text-red-400 font-medium flex items-center gap-1">
@@ -1751,11 +1872,31 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                         </div>
                         <AdminOnly>
                             {vehicle.purchasePendingAmount > 0 ? (
-                                <AddPurchasePaymentDialog vehicle={vehicle} />
+                                <div className="flex flex-col items-end gap-1">
+                                    <AddPurchasePaymentDialog vehicle={vehicle} />
+                                    {vehicle.isFromExchange && vehicle.exchangeSourceRef && (
+                                        <Link
+                                            href={`/${vehicle.exchangeSourceCollection === "vehicles" ? "vehicles" : "consignments"}/${vehicle.exchangeSourceRef}`}
+                                            className="text-[10px] text-primary hover:underline flex items-center gap-0.5 font-medium mt-0.5"
+                                        >
+                                            Source Sale Cash-Back Linked <ExternalLink className="h-2.5 w-2.5" />
+                                        </Link>
+                                    )}
+                                </div>
                             ) : (
-                                <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
-                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd" /></svg>
-                                    Fully Paid
+                                <div className="flex flex-col items-end gap-1 select-none">
+                                    <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd" /></svg>
+                                        Fully Paid
+                                    </div>
+                                    {vehicle.isFromExchange && vehicle.exchangeSourceRef && (
+                                        <Link
+                                            href={`/${vehicle.exchangeSourceCollection === "vehicles" ? "vehicles" : "consignments"}/${vehicle.exchangeSourceRef}`}
+                                            className="text-[10px] text-primary hover:underline flex items-center gap-0.5 font-medium"
+                                        >
+                                            View Source Sale <ExternalLink className="h-2.5 w-2.5" />
+                                        </Link>
+                                    )}
                                 </div>
                             )}
                         </AdminOnly>
@@ -1773,7 +1914,13 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                             <p className="text-xs text-muted-foreground">{formatDate(p.date)}{p.bankAccount && ` — ${p.bankAccount}`}{p.notes && ` — ${p.notes}`}</p>
                                         </div>
                                     </div>
-                                    <AdminOnly><DeletePaymentDialog type="purchase" payment={p} onDelete={() => deletePayment({ type: "purchase", paymentId: p._id })} /></AdminOnly>
+                                    <AdminOnly>
+                                        {vehicle.isFromExchange && p.mode === "Exchange" ? (
+                                            <span className="text-[10px] text-muted-foreground bg-muted border border-border px-2 py-0.5 rounded-full select-none font-medium">Auto (Exchange)</span>
+                                        ) : (
+                                            <DeletePaymentDialog type="purchase" payment={p} onDelete={() => deletePayment({ type: "purchase", paymentId: p._id })} />
+                                        )}
+                                    </AdminOnly>
                                 </div>
                             ))}
                         </div>
@@ -1815,7 +1962,7 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                         { label: "Sold Price", value: formatCurrency(vehicle.soldPrice!), color: "text-foreground" },
                                         { label: "Cash Received", value: formatCurrency(totalCashReceived), color: "text-emerald-400" },
                                         { label: "Exchange Value", value: totalExchangeValue > 0 ? formatCurrency(totalExchangeValue) : "—", color: totalExchangeValue > 0 ? "text-orange-400" : "text-muted-foreground" },
-                                        { label: "Balance", value: formatCurrency(vehicle.balanceAmount), color: vehicle.balanceAmount > 0 ? "text-red-400" : "text-emerald-400" },
+                                        { label: "Balance from Buyer", value: formatCurrency(vehicle.balanceAmount), color: vehicle.balanceAmount > 0 ? "text-red-400" : "text-emerald-400" },
                                     ].map((s) => (
                                         <div key={s.label}>
                                             <p className="text-xs text-muted-foreground">{s.label}</p>
@@ -1823,36 +1970,57 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                         </div>
                                     ))}
                                 </div>
+                                {/* Cash-back liability card */}
                                 {isOverReceived && (
-                                    <div className="mt-3 pt-3 border-t border-amber-500/20 rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2.5 flex items-start gap-2">
-                                        <span className="text-amber-400 text-sm shrink-0">⚠️</span>
-                                        <div>
-                                            <p className="text-xs font-bold text-amber-400">Exchange Value Exceeds Sold Price</p>
-                                            <p className="text-[11px] text-muted-foreground mt-0.5">
-                                                The exchange vehicle was valued at <strong className="text-orange-400">{formatCurrency(totalExchangeValue)}</strong>, which is{" "}
-                                                <strong className="text-amber-400">{formatCurrency(excessAmount)}</strong> more than the sold price of{" "}
-                                                <strong className="text-foreground">{formatCurrency(vehicle.soldPrice!)}</strong>.
-                                                The sale is fully settled. The excess exchange value ({formatCurrency(excessAmount)}) represents an over-trade — the buyer received more trade-in credit than the vehicle&apos;s sale price. Record any cash difference paid to buyer separately if applicable.
-                                            </p>
+                                    <div className={cn(
+                                        "mt-3 rounded-xl border p-3 space-y-3",
+                                        isCashBackPending ? "border-red-500/25 bg-red-500/5" : "border-emerald-500/20 bg-emerald-500/5"
+                                    )}>
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="flex items-start gap-2">
+                                                <span className="text-base shrink-0">{isCashBackPending ? "🔴" : "✅"}</span>
+                                                <div>
+                                                    <p className={cn("text-xs font-bold", isCashBackPending ? "text-red-400" : "text-emerald-400")}>
+                                                        {isCashBackPending ? "Cash-Back Due to Buyer" : "Cash-Back — Fully Paid ✓"}
+                                                    </p>
+                                                    <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
+                                                        Exchange value ({formatCurrency(totalExchangeValue)}) exceeded sold price ({formatCurrency(vehicle.soldPrice!)}) by{" "}
+                                                        <strong className={isCashBackPending ? "text-red-400" : "text-amber-400"}>{formatCurrency(excessAmount)}</strong>.{" "}
+                                                        {isCashBackPending
+                                                            ? <><strong className="text-red-400">{formatCurrency(cashBackBalance)}</strong> still to be returned to the buyer.</>
+                                                            : "All cash-back has been paid to the buyer."
+                                                        }
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            {isCashBackPending && (
+                                                <AdminOnly><RecordCashBackDialog vehicle={vehicle} /></AdminOnly>
+                                            )}
                                         </div>
+                                        {isCashBackPending && (
+                                            <div className="grid grid-cols-3 gap-2 text-xs">
+                                                <div className="text-center rounded-lg bg-background/60 p-2">
+                                                    <p className="text-muted-foreground">Total Due</p>
+                                                    <p className="font-bold text-amber-400">{formatCurrency(excessAmount)}</p>
+                                                </div>
+                                                <div className="text-center rounded-lg bg-background/60 p-2">
+                                                    <p className="text-muted-foreground">Paid Back</p>
+                                                    <p className="font-bold text-emerald-400">{formatCurrency(cashBackPaid)}</p>
+                                                </div>
+                                                <div className="text-center rounded-lg bg-background/60 p-2">
+                                                    <p className="text-muted-foreground">Still Owed</p>
+                                                    <p className="font-bold text-red-400">{formatCurrency(cashBackBalance)}</p>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
-                                {!isOverReceived && (
-                                    <div className="mt-3 pt-3 border-t border-border flex items-center justify-between text-sm">
-                                        <span className="text-muted-foreground">Profit/Loss</span>
-                                        <span className={cn("font-bold", isProfit ? "text-emerald-400" : "text-red-400")}>
-                                            {isProfit ? "+" : "-"}{formatCurrency(Math.abs(pl))}
-                                        </span>
-                                    </div>
-                                )}
-                                {isOverReceived && (
-                                    <div className="mt-2 flex items-center justify-between text-sm">
-                                        <span className="text-muted-foreground">Profit/Loss (based on sold price)</span>
-                                        <span className={cn("font-bold", isProfit ? "text-emerald-400" : "text-red-400")}>
-                                            {isProfit ? "+" : "-"}{formatCurrency(Math.abs(pl))}
-                                        </span>
-                                    </div>
-                                )}
+                                <div className="mt-3 pt-3 border-t border-border flex items-center justify-between text-sm">
+                                    <span className="text-muted-foreground">Profit/Loss (based on sold price)</span>
+                                    <span className={cn("font-bold", isProfit ? "text-emerald-400" : "text-red-400")}>
+                                        {isProfit ? "+" : "-"}{formatCurrency(Math.abs(pl))}
+                                    </span>
+                                </div>
                             </div>
 
                             {/* ── Finance Disbursement Card ── */}
@@ -1934,10 +2102,12 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                 <AdminOnly>
                                     {vehicle.balanceAmount > 0 ? (
                                         <AddSalePaymentDialog vehicle={vehicle} />
+                                    ) : isCashBackPending ? (
+                                        <RecordCashBackDialog vehicle={vehicle} />
                                     ) : isOverReceived ? (
-                                        <div className="flex items-center gap-1.5 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
-                                            <span className="text-sm">⚠️</span>
-                                            Over-received · {formatCurrency(excessAmount)} excess
+                                        <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd" /></svg>
+                                            Over-trade Settled
                                         </div>
                                     ) : (
                                         <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
@@ -2015,6 +2185,80 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                     })}
                                 </div>
                             )}
+                            {/* Cash-Back Payments Section — shown only when over-trade exists */}
+                            {isOverReceived && (
+                                <div className="space-y-2">
+                                    <div className={cn(
+                                        "rounded-xl border p-4",
+                                        isCashBackPending
+                                            ? "border-red-500/30 bg-red-500/5"
+                                            : "border-emerald-500/20 bg-emerald-500/5"
+                                    )}>
+                                        <div className="flex items-center justify-between mb-3">
+                                            <div className="flex items-center gap-2">
+                                                <IndianRupee className={cn("h-3.5 w-3.5", isCashBackPending ? "text-red-400" : "text-emerald-400")} />
+                                                <p className={cn("text-xs font-bold uppercase tracking-widest", isCashBackPending ? "text-red-400" : "text-emerald-400")}>
+                                                    {isCashBackPending ? "Cash-Back Owed to Buyer" : "Cash-Back — Fully Paid"}
+                                                </p>
+                                            </div>
+                                            {isCashBackPending && (
+                                                <AdminOnly><RecordCashBackDialog vehicle={vehicle} /></AdminOnly>
+                                            )}
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-3 text-sm mb-3">
+                                            <div>
+                                                <p className="text-[11px] text-muted-foreground mb-0.5">Total Due</p>
+                                                <p className="font-bold text-amber-400">{formatCurrency(excessAmount)}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[11px] text-muted-foreground mb-0.5">Paid Back</p>
+                                                <p className="font-bold text-emerald-400">{formatCurrency(cashBackPaid)}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[11px] text-muted-foreground mb-0.5">Remaining</p>
+                                                <p className={cn("font-bold", isCashBackPending ? "text-red-400" : "text-emerald-400")}>
+                                                    {isCashBackPending ? formatCurrency(cashBackBalance) : "₹0 ✓"}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        {/* Cash-back progress bar */}
+                                        <div className="h-1.5 bg-muted/40 rounded-full overflow-hidden">
+                                            <div
+                                                className={cn("h-full rounded-full transition-all", isCashBackPending ? "bg-red-500" : "bg-emerald-500")}
+                                                style={{ width: `${Math.min(100, excessAmount > 0 ? (cashBackPaid / excessAmount) * 100 : 100)}%` }}
+                                            />
+                                        </div>
+                                        {/* Individual cash-back payments */}
+                                        {(vehicle.buyerCashBackPayments ?? []).length > 0 && (
+                                            <div className="mt-3 pt-3 border-t border-border space-y-2">
+                                                {(vehicle.buyerCashBackPayments ?? []).map((cbp, i) => (
+                                                    <div key={cbp._id} className="flex items-center justify-between text-sm">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-red-500/10 text-red-400 text-[10px] font-bold shrink-0">
+                                                                {i + 1}
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-xs font-semibold text-foreground">
+                                                                    -{formatCurrency(cbp.amount)} <span className="font-normal text-muted-foreground">via {cbp.mode}</span>
+                                                                </p>
+                                                                <p className="text-[10px] text-muted-foreground">{formatDate(cbp.date)}{cbp.notes && ` — ${cbp.notes}`}</p>
+                                                            </div>
+                                                        </div>
+                                                        <AdminOnly>
+                                                            <button
+                                                                onClick={() => deletePayment({ type: "cashback", paymentId: cbp._id })}
+                                                                className="text-muted-foreground hover:text-destructive transition-colors p-1 cursor-pointer"
+                                                            >
+                                                                <Trash2 className="h-3.5 w-3.5" />
+                                                            </button>
+                                                        </AdminOnly>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </>
                     )}
                 </div>
@@ -2061,18 +2305,25 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                             <div className="p-5 space-y-5">
                                 {vehicle.soldPrice && (
                                     <div className="space-y-2">
-                                        {/* Over-received warning banner */}
+                                        {/* Over-received warning / settled banner */}
                                         {isOverReceived && (
-                                            <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4 flex items-start gap-3">
-                                                <span className="text-lg shrink-0">⚠️</span>
+                                            <div className={cn(
+                                                "rounded-xl border p-4 flex items-start gap-3",
+                                                isCashBackPending
+                                                    ? "border-red-500/30 bg-red-500/5"
+                                                    : "border-emerald-500/20 bg-emerald-500/5"
+                                            )}>
+                                                <span className="text-lg shrink-0">{isCashBackPending ? "🔴" : "✅"}</span>
                                                 <div>
-                                                    <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-1">Exchange Value Exceeds Sold Price</p>
+                                                    <p className={cn("text-xs font-bold uppercase tracking-widest mb-1", isCashBackPending ? "text-red-400" : "text-emerald-400")}>
+                                                        {isCashBackPending ? "Over-Trade — Cash-Back Pending" : "Over-Trade — Cash-Back Settled"}
+                                                    </p>
                                                     <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                                        The exchange vehicle was valued at <strong className="text-orange-400">{formatCurrency(totalExchangeValue)}</strong>, which is{" "}
-                                                        <strong className="text-amber-400">{formatCurrency(excessAmount)} more</strong> than the sold price of{" "}
-                                                        <strong className="text-foreground">{formatCurrency(vehicle.soldPrice)}</strong>.
-                                                        This is an <strong className="text-amber-300">over-trade</strong> — the buyer received more trade-in credit than the vehicle&apos;s price.
-                                                        The sale is treated as fully settled. If any cash was paid back to the buyer, record it separately.
+                                                        Exchange value ({formatCurrency(totalExchangeValue)}) exceeded sold price ({formatCurrency(vehicle.soldPrice)}) by{" "}
+                                                        <strong className="text-amber-400">{formatCurrency(excessAmount)}</strong>.
+                                                        {isCashBackPending
+                                                            ? <> Shop owes <strong className="text-red-400">{formatCurrency(cashBackBalance)}</strong> cash-back to buyer. Go to the Sale &amp; Payments tab to record payments.</>                                                            : " All cash-back has been fully paid to the buyer."
+                                                        }
                                                     </p>
                                                 </div>
                                             </div>
@@ -2159,12 +2410,16 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                                 <span className="font-semibold text-emerald-400">{formatCurrency(totalCashReceived)}</span>
                                             </div>
                                             <div className="flex justify-between items-center font-bold text-sm border-t border-border pt-1.5">
-                                                <span className="text-foreground">{isOverReceived ? "Settlement Status" : "Remaining Balance"}</span>
-                                                <span className={isOverReceived ? "text-amber-400" : vehicle.balanceAmount > 0 ? "text-red-400" : "text-emerald-400"}>
-                                                    {isOverReceived ? (
+                                                <span className="text-foreground">{isCashBackPending ? "Cash-Back Status" : isOverReceived ? "Settlement Status" : "Remaining Balance"}</span>
+                                                <span className={isCashBackPending ? "text-red-400" : isOverReceived ? "text-emerald-400" : vehicle.balanceAmount > 0 ? "text-red-400" : "text-emerald-400"}>
+                                                    {isCashBackPending ? (
+                                                        <span className="flex items-center gap-1">
+                                                            <span>🔴 {formatCurrency(cashBackBalance)} owed to buyer</span>
+                                                        </span>
+                                                    ) : isOverReceived ? (
                                                         <span className="flex items-center gap-1">
                                                             <span>✓ Settled</span>
-                                                            <span className="text-[10px] font-normal text-amber-400/70">(+{formatCurrency(excessAmount)} excess)</span>
+                                                            <span className="text-[10px] font-normal text-emerald-400/70">(+{formatCurrency(excessAmount)} over-trade paid back)</span>
                                                         </span>
                                                     ) : (
                                                         <span>
@@ -2210,15 +2465,15 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                 // Determine icon bg + text color based on action type
                                 const isExchangeOrigin = log.action === "received_via_exchange";
                                 const isExchangePayment = log.action === "sale_payment" && log.description.toLowerCase().includes("exchange");
-                                const isDeletion = log.action === "sale_payment_deleted" || log.action === "purchase_payment_deleted";
+                                const isDeletion = log.action.endsWith("_deleted") || log.action === "removed";
                                 const isRevert = log.action === "sale_undone" || log.action === "reverted";
                                 const isSale = log.action === "sold";
-                                const isPayment = log.action === "sale_payment" || log.action === "purchase_payment";
+                                const isPayment = log.action.includes("payment") || log.action.includes("cashback");
 
                                 const iconBg =
-                                    isExchangeOrigin ? "bg-amber-500/10 text-amber-400" :
-                                        isExchangePayment ? "bg-orange-500/10 text-orange-400" :
-                                            isDeletion ? "bg-red-500/10 text-red-400" :
+                                    isDeletion ? "bg-red-500/10 text-red-400" :
+                                        isExchangeOrigin ? "bg-amber-500/10 text-amber-400" :
+                                            isExchangePayment ? "bg-orange-500/10 text-orange-400" :
                                                 isRevert ? "bg-yellow-500/10 text-yellow-400" :
                                                     isSale ? "bg-emerald-500/10 text-emerald-400" :
                                                         isPayment ? "bg-primary/10 text-primary" :
@@ -2228,7 +2483,8 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                     isDeletion ? "text-red-400 line-through" :
                                         isExchangeOrigin ? "text-amber-400" :
                                             isExchangePayment ? "text-orange-400" :
-                                                "text-primary";
+                                                isSale ? "text-emerald-400" :
+                                                    "text-primary";
 
                                 // Prefix deletions with a clear ✕ marker
                                 const prefix = isDeletion ? "✕ " : "";

@@ -107,6 +107,10 @@ interface IConsignmentVehicle {
     receivedAmount: number;
     buyerBalance: number;
     buyerPaymentStatus: BuyerPaymentStatus;
+    buyerCashBackPayments: ICashBackPayment[];
+    buyerCashBackDue: number;
+    buyerCashBackPaid: number;
+    buyerCashBackBalance: number;
 
     payeePayments: IPayeePayment[];
     paidToPayee: number;
@@ -164,6 +168,9 @@ interface IConsignmentDashboardStats {
     totalReceivedFromBuyers: number;
     totalBuyerBalance: number;
     pendingBuyerPayments: { count: number; amount: number };
+    // Buyer cashback totals
+    totalBuyerCashBackBalance: number;
+    pendingBuyerCashBackPayments: { count: number; amount: number };
     // Payee payment totals (all consignments)
     totalPaidToPayee: number;
     totalPayeeBalance: number;
@@ -178,6 +185,7 @@ interface IConsignmentDashboardStats {
         totalOwnerBalance: number;
         totalReceivedFromBuyers: number;
         totalBuyerBalance: number;
+        totalBuyerCashBackBalance: number;
         fullyClosed: number;
     };
     // Finance Sale

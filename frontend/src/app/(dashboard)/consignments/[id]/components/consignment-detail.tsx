@@ -1054,6 +1054,108 @@ const DeleteConsignmentDialog = ({ vehicle }: { vehicle: IConsignmentVehicle }) 
     );
 };
 
+// ── Record Cash-Back Payment Dialog (Consignment) ─────────────────
+const RecordCashBackDialog = ({ vehicle }: { vehicle: IConsignmentVehicle }) => {
+    const [open, setOpen] = useState(false);
+    const [tid, setTid] = useState<string | number | undefined>();
+    const qc = useQueryClient();
+    const cashBackDue = vehicle.buyerCashBackDue ?? 0;
+    const cashBackBalance = vehicle.buyerCashBackBalance ?? cashBackDue;
+
+    const form = useForm({
+        defaultValues: {
+            date: new Date().toISOString().split("T")[0],
+            amount: cashBackBalance,
+            mode: "Cash" as string,
+            notes: "",
+        },
+    });
+
+    const { mutate, isPending } = useMutation({
+        mutationFn: async (values: { date: string; amount: number; mode: string; notes: string }) => {
+            setTid(toast.loading("Recording cash-back payment..."));
+            return axios.post(`/consignments/${vehicle._id}/buyer-cashback-payments`, values);
+        },
+        onSuccess: () => {
+            toast.success("Cash-back payment recorded!", { id: tid });
+            qc.invalidateQueries({ queryKey: ["consignment", vehicle._id] });
+            qc.invalidateQueries({ queryKey: ["consignments"] });
+            form.reset({ date: new Date().toISOString().split("T")[0], amount: 0, mode: "Cash", notes: "" });
+            setOpen(false);
+        },
+        onError: (err: unknown) => {
+            const e = (err as AxiosError)?.response?.data as ErrorData;
+            toast.error("Error!", { id: tid, description: e?.message || "Failed to record cash-back" });
+        },
+    });
+
+    return (
+        <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset(); }}>
+            <DialogTrigger asChild>
+                <Button size="sm" variant="outline" className="border-amber-500/40 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300 cursor-pointer">
+                    <IndianRupee className="mr-1.5 h-3.5 w-3.5" /> Pay Cash-Back to Buyer
+                </Button>
+            </DialogTrigger>
+            <DialogContent className="w-[96vw] max-w-sm p-0 overflow-hidden rounded-2xl bg-card border-border">
+                <div className="relative p-5 bg-amber-500/5 border-b border-amber-500/20">
+                    <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 border border-amber-500/30">
+                            <IndianRupee className="h-5 w-5 text-amber-400" />
+                        </div>
+                        <div>
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="text-[10px] font-bold tracking-widest text-amber-400 uppercase">Over-trade</span>
+                            </div>
+                            <DialogTitle className="text-base font-bold text-foreground">Pay Cash-Back to Buyer</DialogTitle>
+                            <DialogDescription className="text-xs text-muted-foreground">
+                                Due: {formatCurrency(cashBackBalance)} remaining
+                            </DialogDescription>
+                        </div>
+                    </div>
+                </div>
+                <div className="p-5 space-y-4">
+                    <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-3 text-xs text-amber-400/80 leading-relaxed">
+                        Exchange value exceeded sold price by <strong className="text-amber-400">{formatCurrency(cashBackDue)}</strong>.
+                        Record each payment returned to the buyer here.
+                    </div>
+                    <div className="space-y-3">
+                        <div>
+                            <label className="text-xs font-semibold text-foreground block mb-1">Date <span className="text-destructive">*</span></label>
+                            <Input type="date" className="h-9 bg-muted/50 border-border text-sm" {...form.register("date")} />
+                        </div>
+                        <div>
+                            <label className="text-xs font-semibold text-foreground block mb-1">Amount ₹ <span className="text-destructive">*</span></label>
+                            <div className="relative">
+                                <IndianRupee className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                                <Input type="number" min="1" max={cashBackBalance} className="h-9 bg-muted/50 border-border pl-7 text-sm"
+                                    {...form.register("amount", { valueAsNumber: true })} />
+                            </div>
+                        </div>
+                        <div>
+                            <label className="text-xs font-semibold text-foreground block mb-1">Payment Mode <span className="text-destructive">*</span></label>
+                            <select className="h-9 w-full rounded-md border border-border bg-muted/50 px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                                {...form.register("mode")}>
+                                {["Cash", "UPI", "GPay", "Online", "Bank Transfer", "Cheque"].map(m => (
+                                    <option key={m} value={m}>{m}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-xs font-semibold text-foreground block mb-1">Notes</label>
+                            <Input className="h-9 bg-muted/50 border-border text-sm" placeholder="Optional" {...form.register("notes")} />
+                        </div>
+                    </div>
+                    <Button onClick={form.handleSubmit((v) => mutate(v))} disabled={isPending}
+                        className="w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold cursor-pointer">
+                        {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                        Record ₹{form.watch("amount") ? Number(form.watch("amount")).toLocaleString("en-IN") : 0} Cash-Back
+                    </Button>
+                </div>
+            </DialogContent>
+        </Dialog>
+    );
+};
+
 // ── Main Detail Component ─────────────────────────────────────────
 const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: IConsignmentVehicle | null }) => {
     const [activeTab, setActiveTab] = useState("overview");
@@ -1090,6 +1192,11 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
     const { mutate: deleteBuyerPayment } = useMutation({
         mutationFn: async (paymentId: string) => axios.delete(`/consignments/${id}/buyer-payments/${paymentId}`),
         onSuccess: () => { toast.success("Payment deleted"); qc.invalidateQueries({ queryKey: ["consignment", id] }); qc.invalidateQueries({ queryKey: ["consignments"] }); qc.invalidateQueries({ queryKey: ["consignment-stats"] }); qc.invalidateQueries({ queryKey: ["consignment-reports"] }); qc.invalidateQueries({ queryKey: ["dashboard-stats"] }); },
+    });
+
+    const { mutate: deleteBuyerCashBackPayment } = useMutation({
+        mutationFn: async (paymentId: string) => axios.delete(`/consignments/${id}/buyer-cashback-payments/${paymentId}`),
+        onSuccess: () => { toast.success("Cash-back payment deleted"); qc.invalidateQueries({ queryKey: ["consignment", id] }); qc.invalidateQueries({ queryKey: ["consignments"] }); qc.invalidateQueries({ queryKey: ["consignment-stats"] }); qc.invalidateQueries({ queryKey: ["consignment-reports"] }); qc.invalidateQueries({ queryKey: ["dashboard-stats"] }); },
     });
 
     const { mutate: deletePayeePayment } = useMutation({
@@ -1130,8 +1237,13 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
     const totalExchangeValue = exchangeBuyerPayments.reduce((s, p) => s + p.amount, 0);
     const cashBuyerPayments = vehicle.buyerPayments.filter(p => p.type !== "exchange");
     const totalCashReceived = cashBuyerPayments.reduce((s, p) => s + p.amount, 0);
-    const isOverReceived = isSold && vehicle.soldPrice != null && vehicle.receivedAmount > vehicle.soldPrice;
-    const excessAmount = isOverReceived ? vehicle.receivedAmount - vehicle.soldPrice! : 0;
+    // Use backend-computed values; fall back to frontend calculation for legacy docs
+    const cashBackDue = vehicle.buyerCashBackDue ?? Math.max(0, vehicle.receivedAmount - (vehicle.soldPrice ?? 0));
+    const cashBackPaid = vehicle.buyerCashBackPaid ?? 0;
+    const cashBackBalance = vehicle.buyerCashBackBalance ?? Math.max(0, cashBackDue - cashBackPaid);
+    const isOverReceived = isSold && cashBackDue > 0;
+    const isCashBackPending = isOverReceived && cashBackBalance > 0;
+    const excessAmount = cashBackDue;
 
     const hasExchangeActivity = vehicle.isFromExchange ||
         vehicle.isExchange ||
@@ -1278,8 +1390,13 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                 </span>
                                 <div className="flex items-center gap-1.5">
                                     {isOverReceived && (
-                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25">
-                                            Over-received
+                                        <span className={cn(
+                                            "text-[9px] font-bold px-1.5 py-0.5 rounded-full border",
+                                            isCashBackPending
+                                                ? "bg-red-500/15 text-red-400 border-red-500/25"
+                                                : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"
+                                        )}>
+                                            {isCashBackPending ? "Cash-Back Due" : "Over-trade Settled"}
                                         </span>
                                     )}
                                     <span className="font-bold text-foreground bg-muted/60 px-2 py-0.5 rounded-md border border-border/40 font-mono text-[10px]">
@@ -1302,21 +1419,28 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                 <div
                                     className={cn(
                                         "h-full rounded-full transition-all duration-1000 ease-out shadow-sm",
-                                        isOverReceived
-                                            ? "bg-gradient-to-r from-amber-500 to-orange-400 shadow-[0_0_8px_rgba(245,158,11,0.4)]"
-                                            : vehicle.buyerBalance <= 0
+                                        isCashBackPending
+                                            ? "bg-gradient-to-r from-red-500 to-orange-400 shadow-[0_0_8px_rgba(239,68,68,0.4)]"
+                                            : isOverReceived
                                                 ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
-                                                : "bg-gradient-to-r from-blue-500 to-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]"
+                                                : vehicle.buyerBalance <= 0
+                                                    ? "bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]"
+                                                    : "bg-gradient-to-r from-blue-500 to-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.4)]"
                                     )}
                                     style={{ width: `${animateProgress ? Math.min(100, (vehicle.receivedAmount / vehicle.soldPrice) * 100) : 0}%` }}
                                 />
                             </div>
 
                             <div className="flex items-center mt-0.5">
-                                {isOverReceived ? (
-                                    <p className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
-                                        <span className="animate-pulse h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
-                                        {formatCurrency(vehicle.receivedAmount)} received &middot; {formatCurrency(excessAmount)} excess exchange value
+                                {isCashBackPending ? (
+                                    <p className="text-[10px] text-red-400 font-medium flex items-center gap-1">
+                                        <span className="animate-pulse h-1.5 w-1.5 rounded-full bg-red-400 shrink-0" />
+                                        {formatCurrency(cashBackBalance)} cash-back still owed to buyer &middot; {formatCurrency(cashBackPaid > 0 ? cashBackPaid : 0)} paid so far
+                                    </p>
+                                ) : isOverReceived ? (
+                                    <p className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+                                        Over-trade fully settled &mdash; {formatCurrency(excessAmount)} cash-back paid to buyer
                                     </p>
                                 ) : vehicle.buyerBalance > 0 ? (
                                     <p className="text-[10px] text-amber-400 font-medium flex items-center gap-1">
@@ -1629,10 +1753,12 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                             <AdminOnly>
                                 {vehicle.buyerBalance > 0 ? (
                                     <AddBuyerPaymentDialog vehicle={vehicle} />
+                                ) : isCashBackPending ? (
+                                    <RecordCashBackDialog vehicle={vehicle} />
                                 ) : isOverReceived ? (
-                                    <div className="flex items-center gap-1.5 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
-                                        <span className="text-sm">⚠️</span>
-                                        Over-received &middot; {formatCurrency(excessAmount)} excess
+                                    <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5 shrink-0"><path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd" /></svg>
+                                        Over-trade Settled
                                     </div>
                                 ) : (
                                     <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full font-semibold shadow-inner select-none">
@@ -1716,6 +1842,68 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                     </AdminOnly>
                                 </div>
                             ))}
+                        </div>
+                    )}
+                    {/* Cash-Back Payments Section */}
+                    {isOverReceived && (
+                        <div className={cn(
+                            "rounded-xl border p-4 space-y-3",
+                            isCashBackPending ? "border-red-500/30 bg-red-500/5" : "border-emerald-500/20 bg-emerald-500/5"
+                        )}>
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <IndianRupee className={cn("h-3.5 w-3.5", isCashBackPending ? "text-red-400" : "text-emerald-400")} />
+                                    <p className={cn("text-xs font-bold uppercase tracking-widest", isCashBackPending ? "text-red-400" : "text-emerald-400")}>
+                                        {isCashBackPending ? "Cash-Back Owed to Buyer" : "Cash-Back — Fully Paid"}
+                                    </p>
+                                </div>
+                                {isCashBackPending && (
+                                    <AdminOnly><RecordCashBackDialog vehicle={vehicle} /></AdminOnly>
+                                )}
+                            </div>
+                            <div className="grid grid-cols-3 gap-3 text-sm">
+                                <div>
+                                    <p className="text-[11px] text-muted-foreground mb-0.5">Total Due</p>
+                                    <p className="font-bold text-amber-400">{formatCurrency(excessAmount)}</p>
+                                </div>
+                                <div>
+                                    <p className="text-[11px] text-muted-foreground mb-0.5">Paid Back</p>
+                                    <p className="font-bold text-emerald-400">{formatCurrency(cashBackPaid)}</p>
+                                </div>
+                                <div>
+                                    <p className="text-[11px] text-muted-foreground mb-0.5">Remaining</p>
+                                    <p className={cn("font-bold", isCashBackPending ? "text-red-400" : "text-emerald-400")}>
+                                        {isCashBackPending ? formatCurrency(cashBackBalance) : "₹0 ✓"}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="h-1.5 bg-muted/40 rounded-full overflow-hidden">
+                                <div
+                                    className={cn("h-full rounded-full transition-all", isCashBackPending ? "bg-red-500" : "bg-emerald-500")}
+                                    style={{ width: `${Math.min(100, excessAmount > 0 ? (cashBackPaid / excessAmount) * 100 : 100)}%` }}
+                                />
+                            </div>
+                            {(vehicle.buyerCashBackPayments ?? []).length > 0 && (
+                                <div className="pt-3 border-t border-border space-y-2">
+                                    {(vehicle.buyerCashBackPayments ?? []).map((cbp, i) => (
+                                        <div key={cbp._id} className="flex items-center justify-between text-sm">
+                                            <div className="flex items-center gap-3">
+                                                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-red-500/10 text-red-400 text-[10px] font-bold shrink-0">{i + 1}</div>
+                                                <div>
+                                                    <p className="text-xs font-semibold text-foreground">-{formatCurrency(cbp.amount)} <span className="font-normal text-muted-foreground">via {cbp.mode}</span></p>
+                                                    <p className="text-[10px] text-muted-foreground">{formatDate(cbp.date)}{cbp.notes && ` — ${cbp.notes}`}</p>
+                                                </div>
+                                            </div>
+                                            <AdminOnly>
+                                                <button onClick={() => deleteBuyerCashBackPayment(cbp._id)}
+                                                    className="text-muted-foreground hover:text-destructive transition-colors p-1 cursor-pointer">
+                                                    <Trash2 className="h-3.5 w-3.5" />
+                                                </button>
+                                            </AdminOnly>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -1871,18 +2059,26 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                             <div className="p-5 space-y-5">
                                 {vehicle.soldPrice && (
                                     <div className="space-y-2">
-                                        {/* Over-received warning banner */}
+                                        {/* Over-received warning / settled banner */}
                                         {isOverReceived && (
-                                            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 flex items-start gap-3">
-                                                <span className="text-lg shrink-0">⚠️</span>
+                                            <div className={cn(
+                                                "rounded-xl border p-4 flex items-start gap-3",
+                                                isCashBackPending
+                                                    ? "border-red-500/30 bg-red-500/5"
+                                                    : "border-emerald-500/20 bg-emerald-500/5"
+                                            )}>
+                                                <span className="text-lg shrink-0">{isCashBackPending ? "🔴" : "✅"}</span>
                                                 <div>
-                                                    <p className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-1">Exchange Value Exceeds Sold Price</p>
+                                                    <p className={cn("text-xs font-bold uppercase tracking-widest mb-1", isCashBackPending ? "text-red-400" : "text-emerald-400")}>
+                                                        {isCashBackPending ? "Over-Trade — Cash-Back Pending" : "Over-Trade — Cash-Back Settled"}
+                                                    </p>
                                                     <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                                        The exchange vehicle was valued at <strong className="text-orange-400">{formatCurrency(totalExchangeValue)}</strong>, which is{" "}
-                                                        <strong className="text-amber-400">{formatCurrency(excessAmount)} more</strong> than the sold price of{" "}
-                                                        <strong className="text-foreground">{formatCurrency(vehicle.soldPrice)}</strong>.
-                                                        This is an <strong className="text-amber-300">over-trade</strong> &mdash; the buyer received more trade-in credit than the vehicle&apos;s price.
-                                                        The sale is treated as fully settled. If any cash was paid back to the buyer, record it separately.
+                                                        Exchange value ({formatCurrency(totalExchangeValue)}) exceeded sold price ({formatCurrency(vehicle.soldPrice)}) by{" "}
+                                                        <strong className="text-amber-400">{formatCurrency(excessAmount)}</strong>.
+                                                        {isCashBackPending
+                                                            ? <> Shop owes <strong className="text-red-400">{formatCurrency(cashBackBalance)}</strong> cash-back to buyer. Go to the Buyer Payments tab to record payments.</>
+                                                            : " All cash-back has been fully paid to the buyer."
+                                                        }
                                                     </p>
                                                 </div>
                                             </div>
@@ -1966,12 +2162,16 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                                 <span className="font-semibold text-emerald-400">{formatCurrency(totalCashReceived)}</span>
                                             </div>
                                             <div className="flex justify-between items-center font-bold text-sm border-t border-border pt-1.5">
-                                                <span className="text-foreground">{isOverReceived ? "Settlement Status" : "Remaining Balance"}</span>
-                                                <span className={isOverReceived ? "text-amber-400" : vehicle.buyerBalance > 0 ? "text-red-400" : "text-emerald-400"}>
-                                                    {isOverReceived ? (
+                                                <span className="text-foreground">{isCashBackPending ? "Cash-Back Status" : isOverReceived ? "Settlement Status" : "Remaining Balance"}</span>
+                                                <span className={isCashBackPending ? "text-red-400" : isOverReceived ? "text-emerald-400" : vehicle.buyerBalance > 0 ? "text-red-400" : "text-emerald-400"}>
+                                                    {isCashBackPending ? (
+                                                        <span className="flex items-center gap-1">
+                                                            <span>🔴 {formatCurrency(cashBackBalance)} owed to buyer</span>
+                                                        </span>
+                                                    ) : isOverReceived ? (
                                                         <span className="flex items-center gap-1">
                                                             <span>✓ Settled</span>
-                                                            <span className="text-[10px] font-normal text-amber-400/70">(+{formatCurrency(excessAmount)} excess)</span>
+                                                            <span className="text-[10px] font-normal text-emerald-400/70">(+{formatCurrency(excessAmount)} over-trade paid back)</span>
                                                         </span>
                                                     ) : (
                                                         <span>
@@ -1986,14 +2186,22 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                                             <div>
                                                 <div className="h-2 bg-muted/40 rounded-full overflow-hidden">
                                                     <div
-                                                        className={cn("h-full rounded-full", isOverReceived ? "bg-gradient-to-r from-amber-500 to-orange-400" : "bg-gradient-to-r from-orange-500 to-emerald-500")}
+                                                        className={cn("h-full rounded-full",
+                                                            isCashBackPending
+                                                                ? "bg-gradient-to-r from-red-500 to-orange-400"
+                                                                : isOverReceived
+                                                                    ? "bg-gradient-to-r from-emerald-500 to-emerald-400"
+                                                                    : "bg-gradient-to-r from-orange-500 to-emerald-500"
+                                                        )}
                                                         style={{ width: `${Math.min(100, (vehicle.receivedAmount / vehicle.soldPrice) * 100)}%` }}
                                                     />
                                                 </div>
                                                 <p className="text-[10px] text-muted-foreground mt-1">
-                                                    {isOverReceived
-                                                        ? `100% settled &middot; ${formatCurrency(excessAmount)} over-traded`
-                                                        : `${((vehicle.receivedAmount / vehicle.soldPrice) * 100).toFixed(0)}% of total received (exchange + cash)`
+                                                    {isCashBackPending
+                                                        ? `Sale settled · ${formatCurrency(cashBackBalance)} cash-back still owed to buyer`
+                                                        : isOverReceived
+                                                            ? `100% settled · ${formatCurrency(excessAmount)} over-trade fully paid back`
+                                                            : `${((vehicle.receivedAmount / vehicle.soldPrice) * 100).toFixed(0)}% of total received (exchange + cash)`
                                                     }
                                                 </p>
                                             </div>
@@ -2013,16 +2221,54 @@ const ConsignmentDetail = ({ id, initialData }: { id: string; initialData: ICons
                         <div className="p-8 text-center text-muted-foreground text-sm">No activity recorded</div>
                     ) : (
                         <div className="divide-y divide-border">
-                            {[...vehicle.activityLog].reverse().map((log, i) => (
-                                <div key={i} className="flex items-start gap-4 px-5 py-3">
-                                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><Activity className="h-3.5 w-3.5" /></div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-sm text-foreground">{log.description}</p>
-                                        <p className="text-xs text-muted-foreground mt-0.5">{formatDate(log.date)}</p>
+                            {[...vehicle.activityLog].reverse().map((log, i) => {
+                                const isExchangeOrigin = log.action === "received_via_exchange";
+                                const isExchangePayment = log.action === "buyer_payment" && log.description.toLowerCase().includes("exchange");
+                                const isDeletion = log.action.endsWith("_deleted") || log.action === "removed";
+                                const isRevert = log.action === "sale_undone" || log.action === "reverted";
+                                const isSale = log.action === "sold";
+                                const isPayment = log.action.includes("payment") || log.action.includes("cashback");
+
+                                const iconBg =
+                                    isDeletion ? "bg-red-500/10 text-red-400" :
+                                        isExchangeOrigin ? "bg-amber-500/10 text-amber-400" :
+                                            isExchangePayment ? "bg-orange-500/10 text-orange-400" :
+                                                isRevert ? "bg-yellow-500/10 text-yellow-400" :
+                                                    isSale ? "bg-emerald-500/10 text-emerald-400" :
+                                                        isPayment ? "bg-primary/10 text-primary" :
+                                                            "bg-muted/40 text-muted-foreground";
+
+                                const amountColor =
+                                    isDeletion ? "text-red-400 line-through" :
+                                        isExchangeOrigin ? "text-amber-400" :
+                                            isExchangePayment ? "text-orange-400" :
+                                                isSale ? "text-emerald-400" :
+                                                    "text-primary";
+
+                                const prefix = isDeletion ? "✕ " : "";
+
+                                const LogIcon = isExchangeOrigin || isExchangePayment ? ArrowLeftRight : Activity;
+
+                                return (
+                                    <div key={i} className={`flex items-start gap-4 px-5 py-3 ${isExchangeOrigin ? "bg-amber-500/5" : ""}`}>
+                                        <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs ${iconBg}`}>
+                                            <LogIcon className="h-3.5 w-3.5" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            {isExchangeOrigin && (
+                                                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-400 mb-0.5">Exchange Origin</p>
+                                            )}
+                                            <p className="text-sm text-foreground">{prefix}{log.description}</p>
+                                            <p className="text-xs text-muted-foreground mt-0.5">{formatDate(log.date)}</p>
+                                        </div>
+                                        {log.amount && (
+                                            <span className={`text-xs font-semibold shrink-0 ${amountColor}`}>
+                                                {isDeletion ? "-" : "+"}{formatCurrency(log.amount)}
+                                            </span>
+                                        )}
                                     </div>
-                                    {log.amount && <span className="text-xs font-semibold text-primary shrink-0">{formatCurrency(log.amount)}</span>}
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
                 </div>

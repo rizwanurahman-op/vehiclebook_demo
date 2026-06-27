@@ -17,7 +17,7 @@ import {
     CheckCircle2, Clock, Filter, ArrowLeftRight,
     Download, FileText, FileSpreadsheet, ChevronDown, Calendar, X,
     ArrowDownLeft, ArrowUpRight,
-    Wrench,
+    Wrench, RefreshCw, RefreshCcw
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import Link from "next/link";
@@ -58,8 +58,16 @@ const SaleTypeBadge = ({ type }: { type: SaleType }) => (
     </span>
 );
 
-const StatusBadge = ({ status, settlement }: { status: ConsignmentStatus; settlement: SettlementStatus }) => {
+const StatusBadge = ({ status, settlement, buyerCashBackBalance = 0 }: { status: ConsignmentStatus; settlement: SettlementStatus; buyerCashBackBalance?: number }) => {
     if (settlement === "fully_closed") return <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]"><CheckCircle2 className="mr-1 h-2.5 w-2.5" />Closed</Badge>;
+    if (buyerCashBackBalance > 0) {
+        return (
+            <div className="flex flex-col gap-0.5 animate-pulse">
+                <Badge className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px]"><CheckCircle2 className="mr-1 h-2.5 w-2.5" />Sold</Badge>
+                <Badge className="bg-violet-500/10 text-violet-400 border-violet-500/20 text-[10px]"><RefreshCcw className="mr-1 h-2.5 w-2.5" />Cash-Back Due</Badge>
+            </div>
+        );
+    }
     if (status === "sold" || status === "sold_pending") {
         return (
             <div className="flex flex-col gap-0.5">
@@ -396,9 +404,9 @@ export const ConsignmentList = ({ initialData }: { initialData: ConsignmentPagin
                     </div>
                 </div>
 
-                {/* Row 3: Pending alerts strip (only if there are pending amounts) */}
-                {((stats?.totalBuyerBalance ?? 0) > 0 || (stats?.totalPayeeBalance ?? 0) > 0) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Row 3: Pending alerts strip (only if there are pending amounts or cashback owed) */}
+                {((stats?.totalBuyerBalance ?? 0) > 0 || (stats?.totalPayeeBalance ?? 0) > 0 || (stats?.totalBuyerCashBackBalance ?? 0) > 0) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         {(stats?.totalBuyerBalance ?? 0) > 0 && (
                             <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 flex items-center justify-between">
                                 <div className="flex items-center gap-3">
@@ -411,6 +419,20 @@ export const ConsignmentList = ({ initialData }: { initialData: ConsignmentPagin
                                     </div>
                                 </div>
                                 <p className="text-base font-bold tabular-nums text-amber-400">{formatCurrency(stats?.totalBuyerBalance ?? 0)}</p>
+                            </div>
+                        )}
+                        {(stats?.totalBuyerCashBackBalance ?? 0) > 0 && (
+                            <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/15">
+                                        <RefreshCw className="h-4 w-4 text-violet-400" />
+                                    </div>
+                                    <div>
+                                        <p className="text-xs font-bold text-violet-400">Cash-Back Owed to Buyers</p>
+                                        <p className="text-[10px] text-muted-foreground">{stats?.pendingBuyerCashBackPayments.count} vehicle(s) with cash-back due</p>
+                                    </div>
+                                </div>
+                                <p className="text-base font-bold tabular-nums text-violet-400">{formatCurrency(stats?.totalBuyerCashBackBalance ?? 0)}</p>
                             </div>
                         )}
                         {(stats?.totalPayeeBalance ?? 0) > 0 && (
@@ -560,7 +582,7 @@ export const ConsignmentList = ({ initialData }: { initialData: ConsignmentPagin
                                                 </span>
                                                 {formatDate(v.dateReceived)}
                                             </div>
-                                            <StatusBadge status={v.status} settlement={v.settlementStatus} />
+                                            <StatusBadge status={v.status} settlement={v.settlementStatus} buyerCashBackBalance={v.buyerCashBackBalance} />
                                         </div>
 
                                         {/* Vehicle & Seller */}
@@ -686,7 +708,7 @@ export const ConsignmentList = ({ initialData }: { initialData: ConsignmentPagin
                                         </div>
 
                                         <div className="flex items-center">
-                                            <StatusBadge status={v.status} settlement={v.settlementStatus} />
+                                            <StatusBadge status={v.status} settlement={v.settlementStatus} buyerCashBackBalance={v.buyerCashBackBalance} />
                                         </div>
                                     </div>
                                 );

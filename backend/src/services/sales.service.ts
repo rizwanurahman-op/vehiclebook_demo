@@ -19,11 +19,14 @@ export interface UnifiedSaleRecord {
     balanceAmount: number;
     profitLoss: number;
     profitLossPercentage: number;
-    saleStatus: string;      // fully_received | balance_pending | etc.
+    saleStatus: string;      // fully_received | balance_pending | cashback_pending | etc.
     nocStatus?: string;      // vehicle only
     isExchange: boolean;
     isFromExchange: boolean;
     daysToSell: number | null;
+    // Cash-back (over-trade: exchange value > sold price)
+    buyerCashBackDue: number;
+    buyerCashBackBalance: number;
 }
 
 export interface SalesStats {
@@ -33,6 +36,8 @@ export interface SalesStats {
     totalBalance: number;
     totalProfit: number;
     pendingCount: number;
+    cashbackCount: number;      // sales where shop owes buyer cash-back
+    totalCashbackOwed: number;  // total cash-back still owed to buyers
     exchangeCount: number;
     vehicleSales: number;
     consignmentSales: number;
@@ -94,7 +99,7 @@ export const getSales = async (query: SalesQuery, adminId: string) => {
         if (isExchange === "true") vMatch.isExchange = true;
 
         const vehicles = await Vehicle.find(vMatch)
-            .select("vehicleId vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice totalInvestment receivedAmount balanceAmount profitLoss profitLossPercentage saleStatus nocStatus isExchange isFromExchange daysToSell")
+            .select("vehicleId vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice totalInvestment receivedAmount balanceAmount profitLoss profitLossPercentage saleStatus nocStatus isExchange isFromExchange daysToSell buyerCashBackDue buyerCashBackBalance")
             .sort({ dateSold: -1 })
             .lean();
 
@@ -121,6 +126,8 @@ export const getSales = async (query: SalesQuery, adminId: string) => {
                 isExchange: v.isExchange || false,
                 isFromExchange: v.isFromExchange || false,
                 daysToSell: v.daysToSell ?? null,
+                buyerCashBackDue: (v as any).buyerCashBackDue || 0,
+                buyerCashBackBalance: (v as any).buyerCashBackBalance || 0,
             });
         }
     }
@@ -169,17 +176,20 @@ export const getSales = async (query: SalesQuery, adminId: string) => {
         if (isExchange === "true") cMatch.isExchange = true;
 
         const consignments = await ConsignmentVehicle.find(cMatch)
-            .select("consignmentId saleType vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice totalInvestment receivedAmount buyerBalance netProfit profitLossPercentage settlementStatus isExchange isFromExchange daysInShop")
+            .select("consignmentId saleType vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice totalInvestment receivedAmount buyerBalance buyerCashBackDue buyerCashBackBalance netProfit profitLossPercentage settlementStatus isExchange isFromExchange daysInShop")
             .sort({ dateSold: -1 })
             .lean();
 
         for (const c of consignments) {
             const balance = c.buyerBalance ?? 0;
             const received = c.receivedAmount ?? 0;
+            const cashBackDue = (c as any).buyerCashBackDue || 0;
+            const cashBackBalance = (c as any).buyerCashBackBalance || 0;
 
             // Map consignment settlement to unified saleStatus label
             let saleStatus = "pending";
             if (c.settlementStatus === "fully_closed") saleStatus = "fully_received";
+            else if (cashBackBalance > 0) saleStatus = "cashback_pending";
             else if (c.settlementStatus === "open") saleStatus = "balance_pending";
 
             records.push({
@@ -204,6 +214,8 @@ export const getSales = async (query: SalesQuery, adminId: string) => {
                 isExchange: c.isExchange || false,
                 isFromExchange: c.isFromExchange || false,
                 daysToSell: c.daysInShop ?? null,
+                buyerCashBackDue: cashBackDue,
+                buyerCashBackBalance: cashBackBalance,
             });
         }
     }
@@ -219,10 +231,13 @@ export const getSales = async (query: SalesQuery, adminId: string) => {
     const stats: SalesStats = {
         totalSales: records.length,
         totalRevenue: records.reduce((s, r) => s + r.soldPrice, 0),
-        totalReceived: records.reduce((s, r) => s + r.receivedAmount, 0),
+        // totalReceived: cap per-record at soldPrice to avoid over-counting exchange surplus in summary
+        totalReceived: records.reduce((s, r) => s + Math.min(r.receivedAmount, r.soldPrice), 0),
         totalBalance: records.reduce((s, r) => s + r.balanceAmount, 0),
         totalProfit: records.reduce((s, r) => s + r.profitLoss, 0),
         pendingCount: records.filter(r => r.balanceAmount > 0).length,
+        cashbackCount: records.filter(r => r.buyerCashBackBalance > 0).length,
+        totalCashbackOwed: records.reduce((s, r) => s + (r.buyerCashBackBalance || 0), 0),
         exchangeCount: records.filter(r => r.isExchange).length,
         vehicleSales: records.filter(r => r.source === "vehicle").length,
         consignmentSales: records.filter(r => r.source === "consignment").length,

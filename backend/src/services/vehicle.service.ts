@@ -432,6 +432,38 @@ export const addPurchasePayment = async (id: string, payment: { date: string; am
     const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
 
+    // Bidirectional sync: if this is a trade-in exchange vehicle, sync payment to parent's buyer cashback payments
+    if (vehicle.isFromExchange && vehicle.exchangeSourceRef) {
+        let parent: any = null;
+        if (vehicle.exchangeSourceCollection === "vehicles") {
+            parent = await Vehicle.findById(vehicle.exchangeSourceRef);
+        } else {
+            parent = await ConsignmentVehicle.findById(vehicle.exchangeSourceRef);
+        }
+
+        if (parent) {
+            parent.buyerCashBackPayments.push({
+                _id: new mongoose.Types.ObjectId(),
+                date: new Date(payment.date),
+                amount: payment.amount,
+                mode: payment.mode === "Exchange" ? "Cash" : payment.mode,
+                notes: payment.notes || `Recorded via purchase payment on trade-in vehicle ${vehicle.vehicleId}`,
+            });
+
+            parent.activityLog.push({
+                action: "buyer_cashback_payment",
+                description: `Cash-back payment of ₹${payment.amount} recorded via purchase payment on trade-in ${vehicle.vehicleId}`,
+                amount: payment.amount,
+                date: new Date(payment.date),
+            });
+
+            await parent.save();
+            await syncExchangeVehiclePurchasePayments(parent._id, (vehicle.exchangeSourceCollection || "vehicles") as "vehicles" | "consignmentVehicles");
+            const updatedVehicle = await Vehicle.findById(id);
+            return updatedVehicle;
+        }
+    }
+
     vehicle.purchasePayments.push({
         _id: new mongoose.Types.ObjectId(),
         date: new Date(payment.date),
@@ -454,6 +486,46 @@ export const deletePurchasePayment = async (id: string, paymentId: string, admin
     if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(paymentId)) return null;
     const vehicle = await Vehicle.findOne({ _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) });
     if (!vehicle) return null;
+
+    // Bidirectional sync: if this is a trade-in exchange vehicle, sync deletion to parent's buyer cashback payments
+    if (vehicle.isFromExchange && vehicle.exchangeSourceRef) {
+        let parent: any = null;
+        if (vehicle.exchangeSourceCollection === "vehicles") {
+            parent = await Vehicle.findById(vehicle.exchangeSourceRef);
+        } else {
+            parent = await ConsignmentVehicle.findById(vehicle.exchangeSourceRef);
+        }
+
+        if (parent) {
+            const paymentToDelete = vehicle.purchasePayments.find(p => p._id.toString() === paymentId);
+            if (paymentToDelete) {
+                if (paymentToDelete.mode === "Exchange") {
+                    throw new Error("Cannot delete exchange trade-in credit payment.");
+                }
+
+                const cbIdx = parent.buyerCashBackPayments.findIndex((cbp: any) => 
+                    cbp.amount === paymentToDelete.amount && 
+                    new Date(cbp.date).getTime() === new Date(paymentToDelete.date).getTime()
+                );
+
+                if (cbIdx !== -1) {
+                    const removed = parent.buyerCashBackPayments[cbIdx];
+                    parent.buyerCashBackPayments.splice(cbIdx, 1);
+                    parent.activityLog.push({
+                        action: "buyer_cashback_payment_deleted",
+                        description: `Cash-back payment of ₹${removed.amount} deleted via purchase payment deletion on ${vehicle.vehicleId}`,
+                        amount: removed.amount,
+                        date: new Date(),
+                    });
+                    await parent.save();
+                    await syncExchangeVehiclePurchasePayments(parent._id, (vehicle.exchangeSourceCollection || "vehicles") as "vehicles" | "consignmentVehicles");
+                    const updatedVehicle = await Vehicle.findById(id);
+                    return updatedVehicle;
+                }
+            }
+        }
+    }
+
     vehicle.purchasePayments = vehicle.purchasePayments.filter((p) => p._id.toString() !== paymentId);
     await vehicle.save();
     return vehicle;
@@ -751,6 +823,7 @@ export const addSalePayment = async (id: string, payment: {
         date: new Date(),
     });
     await vehicle.save();
+    await syncExchangeVehiclePurchasePayments(vehicle._id, "vehicles");
     return { vehicle, exchangeVehicle };
 };
 
@@ -851,8 +924,10 @@ export const deleteSalePayment = async (id: string, paymentId: string, adminId: 
     }
 
     await vehicle.save();
+    await syncExchangeVehiclePurchasePayments(vehicle._id, "vehicles");
     return vehicle;
 };
+
 
 // ── Cost Management ──────────────────────────────────────────────
 
@@ -1006,7 +1081,7 @@ export const getMonthlyReport = async (adminId?: string) => {
 export const getPendingReport = async (params?: { vehicleType?: string; dateFrom?: string; dateTo?: string; adminId?: string }): Promise<unknown> => {
     const match: Record<string, unknown> = {
         isActive: true,
-        saleStatus: { $in: ["balance_pending", "noc_pending", "noc_cash_pending"] },
+        saleStatus: { $in: ["balance_pending", "noc_pending", "noc_cash_pending", "cashback_pending"] },
     };
     if (params?.adminId) match.adminId = new (require("mongoose")).Types.ObjectId(params.adminId);
     if (params?.vehicleType) match.vehicleType = params.vehicleType;
@@ -1017,7 +1092,7 @@ export const getPendingReport = async (params?: { vehicleType?: string; dateFrom
         match.dateSold = df;
     }
     return Vehicle.find(match)
-        .select("vehicleId vehicleType make model registrationNo purchasedFrom soldTo datePurchased dateSold purchasePrice soldPrice totalInvestment receivedAmount balanceAmount purchasePendingAmount status saleStatus nocStatus purchasePaymentStatus")
+        .select("vehicleId vehicleType make model registrationNo purchasedFrom soldTo datePurchased dateSold purchasePrice soldPrice totalInvestment receivedAmount balanceAmount buyerCashBackDue buyerCashBackBalance purchasePendingAmount status saleStatus nocStatus purchasePaymentStatus")
         .sort({ dateSold: -1 })
         .lean();
 };
@@ -1086,7 +1161,7 @@ export const getPurchaseRegister = async (query: PurchaseRegisterQuery & { admin
     const skip = (page - 1) * limit;
     const [data, total, agg] = await Promise.all([
         Vehicle.find(match)
-            .select("vehicleId vehicleType make model registrationNo purchasedFrom purchasedFromPhone datePurchased purchasePrice purchasePayments purchasePaymentStatus purchasePendingAmount totalInvestment status fundingSource")
+            .select("vehicleId vehicleType make model registrationNo purchasedFrom purchasedFromPhone datePurchased purchasePrice purchasePayments purchasePaymentStatus purchasePendingAmount totalInvestment status fundingSource isFromExchange")
             .sort({ datePurchased: -1 })
             .skip(skip)
             .limit(limit)
@@ -1177,3 +1252,153 @@ export const lookupVehiclesByRegNo = async (q: string, adminId?: string) => {
 // ── Export helpers re-exported so the controller can reach them via vs.* ──────
 export { exportVehicleDetailCSV, exportVehicleDetailPDF } from "./vehicle_detail_export";
 export { exportVehiclesCSV, exportVehiclesPDF } from "./vehicle_list_export";
+
+// ── Buyer Cash-Back Payments ───────────────────────────────────────
+// Used when exchange value > sold price (over-trade). The shop owes the buyer
+// the difference and records each outgoing cash-back payment here.
+export const addBuyerCashBackPayment = async (
+    id: string,
+    adminId: string,
+    payload: { date: Date; amount: number; mode: string; notes?: string }
+) => {
+    const vehicle = await Vehicle.findOne({ _id: id, adminId, isActive: true });
+    if (!vehicle) throw new Error("Vehicle not found");
+    if (!vehicle.dateSold || !vehicle.soldPrice) throw new Error("Vehicle has not been sold");
+    if (vehicle.buyerCashBackDue <= 0) throw new Error("No cash-back is due on this vehicle");
+    if (payload.amount <= 0) throw new Error("Amount must be greater than 0");
+    if (payload.amount > (vehicle.buyerCashBackBalance ?? vehicle.buyerCashBackDue)) {
+        throw new Error(`Amount (₹${payload.amount}) exceeds remaining cash-back balance (₹${vehicle.buyerCashBackBalance})`);
+    }
+
+    (vehicle.buyerCashBackPayments as any[]).push({
+        date: payload.date,
+        amount: payload.amount,
+        mode: payload.mode,
+        notes: payload.notes,
+    });
+
+    vehicle.activityLog.push({
+        action: "buyer_cashback_payment",
+        description: `Cash-back payment of ₹${payload.amount} recorded via ${payload.mode}${payload.notes ? ` — ${payload.notes}` : ""}`,
+        amount: payload.amount,
+        date: new Date(),
+    });
+
+    await vehicle.save();
+    await syncExchangeVehiclePurchasePayments(vehicle._id, "vehicles");
+    return vehicle;
+};
+
+export const deleteBuyerCashBackPayment = async (id: string, adminId: string, paymentId: string) => {
+    const vehicle = await Vehicle.findOne({ _id: id, adminId, isActive: true });
+    if (!vehicle) throw new Error("Vehicle not found");
+
+    const idx = vehicle.buyerCashBackPayments.findIndex((p) => p._id.toString() === paymentId);
+    if (idx === -1) throw new Error("Cash-back payment not found");
+
+    const removed = vehicle.buyerCashBackPayments[idx];
+    vehicle.buyerCashBackPayments.splice(idx, 1);
+
+    vehicle.activityLog.push({
+        action: "buyer_cashback_payment_deleted",
+        description: `Cash-back payment of ₹${removed.amount} deleted`,
+        amount: removed.amount,
+        date: new Date(),
+    });
+
+    await vehicle.save();
+    await syncExchangeVehiclePurchasePayments(vehicle._id, "vehicles");
+    return vehicle;
+};
+
+export const syncExchangeVehiclePurchasePayments = async (
+    parentId: string | mongoose.Types.ObjectId,
+    parentCollection: "vehicles" | "consignmentVehicles"
+) => {
+    let parent: any = null;
+    if (parentCollection === "vehicles") {
+        parent = await Vehicle.findById(parentId).lean();
+    } else {
+        parent = await ConsignmentVehicle.findById(parentId).lean();
+    }
+    if (!parent) return;
+
+    // Find any exchange payments on the parent
+    const payments = parentCollection === "vehicles" ? parent.salePayments : parent.buyerPayments;
+    const exchangePayments = (payments || []).filter((p: any) => p.type === "exchange");
+
+    for (const ep of exchangePayments) {
+        if (ep.exchangeCreatedRef && ep.exchangeCreatedIn === "vehicles") {
+            const exVehicle = await Vehicle.findById(ep.exchangeCreatedRef);
+            if (exVehicle) {
+                const exchangeValue = ep.amount;
+                const cashBackDue = parent.buyerCashBackDue || 0;
+                const tradeInCredit = Math.max(0, exchangeValue - cashBackDue);
+
+                const newPayments: any[] = [];
+                newPayments.push({
+                    _id: new mongoose.Types.ObjectId(),
+                    date: new Date(ep.date),
+                    amount: tradeInCredit,
+                    mode: "Exchange" as const,
+                    notes: `Trade-in offset credit from ${parent.make || "vehicle"} sale`,
+                });
+
+                const cbPayments = parent.buyerCashBackPayments || [];
+                for (const cbp of cbPayments) {
+                    newPayments.push({
+                        _id: cbp._id || new mongoose.Types.ObjectId(),
+                        date: new Date(cbp.date),
+                        amount: cbp.amount,
+                        mode: cbp.mode || "Cash",
+                        notes: cbp.notes || `Paid via cash-back refund`,
+                    });
+                }
+
+                // Compare newPayments with current exVehicle.purchasePayments to log additions/deletions in child's activityLog
+                const oldPayments = exVehicle.purchasePayments || [];
+
+                // Find additions
+                for (const np of newPayments) {
+                    if ((np.mode as string) === "Exchange") continue;
+
+                    const matchedInOld = oldPayments.some((op: any) => 
+                        op._id.toString() === np._id.toString() || 
+                        (op.amount === np.amount && new Date(op.date).getTime() === new Date(np.date).getTime())
+                    );
+
+                    if (!matchedInOld) {
+                        exVehicle.activityLog.push({
+                            action: "purchase_payment",
+                            description: `Purchase payment of ₹${np.amount.toLocaleString("en-IN")} via ${np.mode} (synced from source sale cash-back)`,
+                            amount: np.amount,
+                            date: new Date(np.date),
+                        });
+                    }
+                }
+
+                // Find deletions
+                for (const op of oldPayments) {
+                    if ((op.mode as string) === "Exchange") continue;
+
+                    const matchedInNew = newPayments.some((np: any) => 
+                        np._id.toString() === op._id.toString() || 
+                        (np.amount === op.amount && new Date(np.date).getTime() === new Date(op.date).getTime())
+                    );
+
+                    if (!matchedInNew) {
+                        exVehicle.activityLog.push({
+                            action: "purchase_payment_deleted",
+                            description: `Purchase payment of ₹${op.amount.toLocaleString("en-IN")} via ${op.mode} deleted (synced from source sale cash-back)`,
+                            amount: op.amount,
+                            date: new Date(),
+                        });
+                    }
+                }
+
+                exVehicle.purchasePayments = newPayments;
+                await exVehicle.save();
+            }
+        }
+    }
+};

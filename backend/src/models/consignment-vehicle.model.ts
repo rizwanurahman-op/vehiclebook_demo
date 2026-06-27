@@ -100,6 +100,17 @@ export interface IConsignmentVehicle extends Omit<Document, 'model'> {
     receivedAmount: number;
     buyerBalance: number;
     buyerPaymentStatus: "pending" | "partial" | "paid";
+    // Cash-back tracking (when exchange value > sold price, shop owes buyer the difference)
+    buyerCashBackPayments: Array<{
+        _id: mongoose.Types.ObjectId;
+        date: Date;
+        amount: number;
+        mode: "Cash" | "Online" | "Cheque" | "UPI" | "GPay" | "Bank Transfer";
+        notes?: string;
+    }>;
+    buyerCashBackDue: number;
+    buyerCashBackPaid: number;
+    buyerCashBackBalance: number;
 
     // Payee Payment Tracking — Money OUT (owner or finance)
     payeePayments: Array<{
@@ -266,6 +277,16 @@ const ConsignmentVehicleSchema = new Schema<IConsignmentVehicle>({
     receivedAmount: { type: Number, default: 0 },
     buyerBalance: { type: Number, default: 0 },
     buyerPaymentStatus: { type: String, enum: ["pending", "partial", "paid"], default: "pending" },
+    // Cash-back tracking
+    buyerCashBackPayments: { type: [new Schema({
+        date: { type: Date, required: true },
+        amount: { type: Number, required: true, min: 0 },
+        mode: { type: String, enum: ["Cash", "Online", "Cheque", "UPI", "GPay", "Bank Transfer"], required: true },
+        notes: String,
+    }, { _id: true })], default: [] },
+    buyerCashBackDue: { type: Number, default: 0 },
+    buyerCashBackPaid: { type: Number, default: 0 },
+    buyerCashBackBalance: { type: Number, default: 0 },
 
     payeePayments: { type: [PayeePaymentSchema], default: [] },
     paidToPayee: { type: Number, default: 0 },
@@ -338,6 +359,11 @@ ConsignmentVehicleSchema.pre("save", function (next) {
         this.buyerPaymentStatus = "pending";
     }
 
+    // 3c. Cash-back tracking (over-trade: exchange value > sold price)
+    this.buyerCashBackDue = Math.max(0, this.receivedAmount - (this.soldPrice || 0));
+    this.buyerCashBackPaid = (this.buyerCashBackPayments || []).reduce((s, p) => s + p.amount, 0);
+    this.buyerCashBackBalance = Math.max(0, this.buyerCashBackDue - this.buyerCashBackPaid);
+
     // 4. Payee Payment Status
     this.paidToPayee = this.payeePayments.reduce((s, p) => s + p.amount, 0);
     this.payeeBalance = Math.max(0, (this.soldPrice || 0) - this.totalReconCost - this.paidToPayee);
@@ -376,7 +402,7 @@ ConsignmentVehicleSchema.pre("save", function (next) {
 
     // 6. Settlement Status
     if (this.dateSold) {
-        const buyerDone = this.buyerPaymentStatus === "paid";
+        const buyerDone = this.buyerPaymentStatus === "paid" && this.buyerCashBackBalance <= 0;
         const payeeDone = this.payeePaymentStatus === "closed";
         if (buyerDone && payeeDone) {
             this.settlementStatus = "fully_closed";

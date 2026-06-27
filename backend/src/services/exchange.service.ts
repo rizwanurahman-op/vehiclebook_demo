@@ -34,6 +34,11 @@ export interface ExchangeDeal {
     sourceTotalReceived: number;   // cash + exchange
     sourceRemainingBalance: number;
     isFullySettled: boolean;
+
+    // Over-trade Cashback
+    buyerCashBackDue: number;
+    buyerCashBackPaid: number;
+    buyerCashBackBalance: number;
 }
 
 export interface ExchangeStats {
@@ -66,7 +71,7 @@ async function getVehicleExchangeDeals(adminId: string, dateFrom?: string, dateT
     }
 
     const vehicles = await Vehicle.find(match)
-        .select("vehicleId make model registrationNo soldTo dateSold soldPrice receivedAmount balanceAmount salePayments")
+        .select("vehicleId make model registrationNo soldTo dateSold soldPrice receivedAmount balanceAmount salePayments buyerCashBackDue buyerCashBackPaid buyerCashBackBalance")
         .lean();
 
     const deals: ExchangeDeal[] = [];
@@ -120,8 +125,11 @@ async function getVehicleExchangeDeals(adminId: string, dateFrom?: string, dateT
 
                 sourceTotalCashReceived: cashReceived,
                 sourceTotalReceived: cashReceived + ep.amount,
-                sourceRemainingBalance: Math.max(0, (v.soldPrice || 0) - (cashReceived + ep.amount)),
-                isFullySettled: ((v.soldPrice || 0) - (cashReceived + ep.amount)) <= 0,
+                sourceRemainingBalance: v.balanceAmount || 0,
+                isFullySettled: (v.balanceAmount || 0) <= 0 && (v.buyerCashBackBalance || 0) <= 0,
+                buyerCashBackDue: v.buyerCashBackDue || 0,
+                buyerCashBackPaid: v.buyerCashBackPaid || 0,
+                buyerCashBackBalance: v.buyerCashBackBalance || 0,
             });
         }
     }
@@ -141,7 +149,7 @@ async function getConsignmentExchangeDeals(adminId: string, dateFrom?: string, d
     }
 
     const consignments = await ConsignmentVehicle.find(match)
-        .select("consignmentId make model registrationNo soldTo dateSold soldPrice receivedAmount buyerBalance buyerPayments")
+        .select("consignmentId make model registrationNo soldTo dateSold soldPrice receivedAmount buyerBalance buyerPayments buyerCashBackDue buyerCashBackPaid buyerCashBackBalance")
         .lean();
 
     const deals: ExchangeDeal[] = [];
@@ -194,8 +202,11 @@ async function getConsignmentExchangeDeals(adminId: string, dateFrom?: string, d
 
                 sourceTotalCashReceived: cashReceived,
                 sourceTotalReceived: cashReceived + ep.amount,
-                sourceRemainingBalance: Math.max(0, (c.soldPrice || 0) - (cashReceived + ep.amount)),
-                isFullySettled: ((c.soldPrice || 0) - (cashReceived + ep.amount)) <= 0,
+                sourceRemainingBalance: c.buyerBalance || 0,
+                isFullySettled: (c.buyerBalance || 0) <= 0 && (c.buyerCashBackBalance || 0) <= 0,
+                buyerCashBackDue: c.buyerCashBackDue || 0,
+                buyerCashBackPaid: c.buyerCashBackPaid || 0,
+                buyerCashBackBalance: c.buyerCashBackBalance || 0,
             });
         }
     }

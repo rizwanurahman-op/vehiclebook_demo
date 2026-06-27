@@ -142,6 +142,7 @@ export const deleteSalePayment = async (req: AuthRequest, res: Response): Promis
     res.json({ success: true, statusCode: 200, message: "Payment deleted", data: vehicle });
 };
 
+
 // ── Costs ─────────────────────────────────────────────────────────
 export const updateCosts = async (req: AuthRequest, res: Response): Promise<void> => {
     const parsed = updateCostsSchema.safeParse(req.body);
@@ -317,11 +318,10 @@ export const exportVehicles = async (req: AuthRequest, res: Response): Promise<v
         const csv = await vs.exportVehiclesCSV(query, adminId);
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}.csv"`);
-        res.send("\uFEFF" + csv); // BOM prefix for Excel UTF-8 compatibility
+        res.send("\uFEFF" + csv);
         return;
     }
 
-    // PDF
     const pdfBuffer = await vs.exportVehiclesPDF(query, adminId);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}.pdf"`);
@@ -356,3 +356,21 @@ export const exportVehicleDetail = async (req: AuthRequest, res: Response): Prom
     res.send(pdf);
 };
 
+// ── Buyer Cash-Back Payments ───────────────────────────────────────
+export const addBuyerCashBackPayment = async (req: AuthRequest, res: Response): Promise<void> => {
+    const id = req.params.id as string;
+    const { date, amount, mode, notes } = req.body;
+    if (!date || !amount || !mode) {
+        res.status(400).json({ success: false, statusCode: 400, message: "date, amount and mode are required" });
+        return;
+    }
+    const vehicle = await vs.addBuyerCashBackPayment(id, req.adminId!, { date: new Date(date), amount: Number(amount), mode, notes });
+    res.json({ success: true, statusCode: 200, message: "Cash-back payment recorded", data: vehicle });
+};
+
+export const deleteBuyerCashBackPayment = async (req: AuthRequest, res: Response): Promise<void> => {
+    const id = req.params.id as string;
+    const paymentId = req.params.paymentId as string;
+    const vehicle = await vs.deleteBuyerCashBackPayment(id, req.adminId!, paymentId);
+    res.json({ success: true, statusCode: 200, message: "Cash-back payment deleted", data: vehicle });
+};

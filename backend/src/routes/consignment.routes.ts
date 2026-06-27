@@ -46,4 +46,8 @@ router.post("/:id/payee-payments", isAdmin, writeLimiter, asyncHandler(cc.addPay
 router.delete("/:id/payee-payments/:paymentId", isAdmin, writeLimiter, asyncHandler(cc.deletePayeePayment));
 router.post("/:id/payee-payments/close", isAdmin, writeLimiter, asyncHandler(cc.closePayeeSettlement));
 
+// ── Buyer Cash-Back Payments (over-trade) ─────────────────────────
+router.post("/:id/buyer-cashback-payments", isAdmin, writeLimiter, asyncHandler(cc.addBuyerCashBackPayment));
+router.delete("/:id/buyer-cashback-payments/:paymentId", isAdmin, writeLimiter, asyncHandler(cc.deleteBuyerCashBackPayment));
+
 export default router;

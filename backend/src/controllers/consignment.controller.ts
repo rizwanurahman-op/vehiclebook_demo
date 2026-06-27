@@ -136,6 +136,7 @@ export const deleteBuyerPayment = async (req: Request, res: Response): Promise<v
     res.json({ success: true, statusCode: 200, message: "Buyer payment deleted", data: vehicle });
 };
 
+
 // ── Payee Payments ─────────────────────────────────────────────────
 
 export const addPayeePayment = async (req: Request, res: Response): Promise<void> => {
@@ -259,3 +260,25 @@ export const exportConsignmentDetail = async (req: Request, res: Response): Prom
     res.setHeader("Content-Disposition", `attachment; filename="consignment_${id}_${timestamp}.pdf"`);
     res.send(pdf);
 };
+
+// ── Buyer Cash-Back Payments ───────────────────────────────────────
+export const addBuyerCashBackPayment = async (req: Request, res: Response): Promise<void> => {
+    const id = req.params.id as string;
+    const { date, amount, mode, notes } = req.body;
+    const adminId = (req as any).adminId as string;
+    if (!date || !amount || !mode) {
+        res.status(400).json({ success: false, statusCode: 400, message: "date, amount and mode are required" });
+        return;
+    }
+    const vehicle = await cs.addBuyerCashBackPayment(id, adminId, { date: new Date(date), amount: Number(amount), mode, notes });
+    res.json({ success: true, statusCode: 200, message: "Cash-back payment recorded", data: vehicle });
+};
+
+export const deleteBuyerCashBackPayment = async (req: Request, res: Response): Promise<void> => {
+    const id = req.params.id as string;
+    const paymentId = req.params.paymentId as string;
+    const adminId = (req as any).adminId as string;
+    const vehicle = await cs.deleteBuyerCashBackPayment(id, adminId, paymentId);
+    res.json({ success: true, statusCode: 200, message: "Cash-back payment deleted", data: vehicle });
+};
+

@@ -1,8 +1,8 @@
 type VehicleType = "two_wheeler" | "four_wheeler";
 type VehicleStatus = "in_stock" | "reconditioning" | "ready_for_sale" | "sold" | "sold_pending" | "exchanged";
-type SaleStatus = "fully_received" | "balance_pending" | "noc_pending" | "noc_cash_pending" | null;
+type SaleStatus = "fully_received" | "balance_pending" | "noc_pending" | "noc_cash_pending" | "cashback_pending" | null;
 type NOCStatus = "not_applicable" | "pending" | "received" | "submitted" | "completed";
-type VehiclePaymentMode = "Cash" | "Online" | "Cheque" | "UPI" | "GPay" | "Finance" | "Bank Transfer";
+type VehiclePaymentMode = "Cash" | "Online" | "Cheque" | "UPI" | "GPay" | "Finance" | "Bank Transfer" | "Exchange";
 type CostCategory = "travel" | "workshop" | "spareParts" | "alignment" | "painting" | "washing" | "fuel" | "paperwork" | "commission" | "other";
 type FundingSource = "own" | "investor" | "mixed";
 type PurchasePaymentStatus = "paid" | "partial" | "pending";
@@ -52,6 +52,14 @@ interface IVehicleDocument {
     name: string;
     url: string;
     uploadedAt: string;
+}
+
+interface ICashBackPayment {
+    _id: string;
+    date: string;
+    amount: number;
+    mode: "Cash" | "Online" | "Cheque" | "UPI" | "GPay" | "Bank Transfer";
+    notes?: string;
 }
 
 interface IActivityLogEntry {
@@ -110,6 +118,10 @@ interface IVehicle {
     salePayments: IVehiclePayment[];
     receivedAmount: number;
     balanceAmount: number;
+    buyerCashBackPayments: ICashBackPayment[];
+    buyerCashBackDue: number;
+    buyerCashBackPaid: number;
+    buyerCashBackBalance: number;
     profitLoss: number;
     profitLossPercentage: number;
     daysToSell: number | null;

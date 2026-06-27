@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import superAdminApi, { Admin, AdminStats } from "@/services/superadmin.service";
 import {
@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 
 function StatBadge({ label, value, icon: Icon, color }: {
     label: string; value: number; icon: React.ElementType; color: string;
@@ -39,7 +38,7 @@ export default function AdminDetailPage() {
         plan: "free" as "free" | "pro" | "enterprise", password: "",
     });
 
-    const load = async () => {
+    const load = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -59,9 +58,9 @@ export default function AdminDetailPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [id]);
 
-    useEffect(() => { load(); }, [id]);
+    useEffect(() => { load(); }, [load]);
 
     const handleSave = async () => {
         setSaving(true);

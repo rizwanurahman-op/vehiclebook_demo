@@ -56,7 +56,7 @@ export const addPurchasePaymentSchema = z.object({
         (v) => (v === null || v === undefined || v === "" ? 0 : Number(v)),
         z.number().min(0, { message: "Amount must be 0 or greater" })
     ),
-    mode: z.enum(["Cash", "Online", "Cheque", "UPI", "Bank Transfer"]),
+    mode: z.enum(["Cash", "Online", "Cheque", "UPI", "Bank Transfer", "Exchange"]),
     bankAccount: z.string().optional(),
     notes: z.string().optional(),
 });

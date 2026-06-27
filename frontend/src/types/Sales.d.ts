@@ -21,6 +21,9 @@ interface UnifiedSaleRecord {
     isExchange: boolean;
     isFromExchange: boolean;
     daysToSell: number | null;
+    // Cash-back fields (over-trade: exchange value > sold price)
+    buyerCashBackDue: number;
+    buyerCashBackBalance: number;
 }
 
 interface SalesStats {
@@ -30,6 +33,8 @@ interface SalesStats {
     totalBalance: number;
     totalProfit: number;
     pendingCount: number;
+    cashbackCount: number;       // sales where shop still owes cash-back to buyer
+    totalCashbackOwed: number;   // total remaining cash-back owed
     exchangeCount: number;
     vehicleSales: number;
     consignmentSales: number;

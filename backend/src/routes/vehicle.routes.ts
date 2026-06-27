@@ -52,4 +52,8 @@ router.delete("/:id/purchase-payments/:paymentId", isAdmin, writeLimiter, asyncH
 router.post("/:id/sale-payments", isAdmin, writeLimiter, asyncHandler(vc.addSalePayment));
 router.delete("/:id/sale-payments/:paymentId", isAdmin, writeLimiter, asyncHandler(vc.deleteSalePayment));
 
+// ── Buyer Cash-Back Payments (over-trade) ─────────────────────────
+router.post("/:id/buyer-cashback-payments", isAdmin, writeLimiter, asyncHandler(vc.addBuyerCashBackPayment));
+router.delete("/:id/buyer-cashback-payments/:paymentId", isAdmin, writeLimiter, asyncHandler(vc.deleteBuyerCashBackPayment));
+
 export default router;

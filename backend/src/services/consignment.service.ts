@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { ConsignmentVehicle, IConsignmentVehicle } from "../models/consignment-vehicle.model";
 import { Vehicle } from "../models/vehicle.model";
 import { getNextId } from "./counter.service";
+import { syncExchangeVehiclePurchasePayments } from "./vehicle.service";
 
 interface ConsignmentQuery {
     saleType?: string;
@@ -236,9 +237,23 @@ export const getConsignmentStats = async (query: { saleType?: string; vehicleTyp
                 totalRevenue: { $sum: { $ifNull: ["$soldPrice", 0] } },
                 totalNetProfit: { $sum: { $cond: [{ $in: ["$status", ["sold", "sold_pending"]] }, "$netProfit", 0] } },
                 // Buyer payment tracking
-                totalReceivedFromBuyers: { $sum: { $ifNull: ["$receivedAmount", 0] } },
+                totalReceivedFromBuyers: {
+                    $sum: {
+                        $cond: [
+                            { $and: [
+                                { $gt: ["$receivedAmount", { $ifNull: ["$soldPrice", 0] }] },
+                                { $gt: [{ $ifNull: ["$soldPrice", 0] }, 0] }
+                            ] },
+                            "$soldPrice",
+                            { $ifNull: ["$receivedAmount", 0] }
+                        ]
+                    }
+                },
                 totalBuyerBalance: { $sum: { $ifNull: ["$buyerBalance", 0] } },
                 pendingBuyerCount: { $sum: { $cond: [{ $gt: ["$buyerBalance", 0] }, 1, 0] } },
+                // Buyer cashback tracking (liability)
+                totalBuyerCashBackBalance: { $sum: { $ifNull: ["$buyerCashBackBalance", 0] } },
+                pendingBuyerCashBackCount: { $sum: { $cond: [{ $gt: ["$buyerCashBackBalance", 0] }, 1, 0] } },
                 // Payee payment tracking (Owner for park_sale, Finance for finance_sale)
                 totalPaidToPayee: { $sum: { $ifNull: ["$paidToPayee", 0] } },
                 // Only sum payee balance from sold vehicles (unsold vehicles don't have an outstanding owner liability yet)
@@ -272,6 +287,12 @@ export const getConsignmentStats = async (query: { saleType?: string; vehicleTyp
             count: z(p.pendingBuyerCount) + z(f.pendingBuyerCount),
             amount: z(p.totalBuyerBalance) + z(f.totalBuyerBalance),
         },
+        // Buyer cashback aggregate
+        totalBuyerCashBackBalance: z(p.totalBuyerCashBackBalance) + z(f.totalBuyerCashBackBalance),
+        pendingBuyerCashBackPayments: {
+            count: z(p.pendingBuyerCashBackCount) + z(f.pendingBuyerCashBackCount),
+            amount: z(p.totalBuyerCashBackBalance) + z(f.totalBuyerCashBackBalance),
+        },
         // Payee aggregate
         totalPaidToPayee: z(p.totalPaidToPayee) + z(f.totalPaidToPayee),
         totalPayeeBalance: z(p.totalPayeeBalance) + z(f.totalPayeeBalance),
@@ -289,6 +310,7 @@ export const getConsignmentStats = async (query: { saleType?: string; vehicleTyp
             totalOwnerBalance: z(p.totalPayeeBalance),
             totalReceivedFromBuyers: z(p.totalReceivedFromBuyers),
             totalBuyerBalance: z(p.totalBuyerBalance),
+            totalBuyerCashBackBalance: z(p.totalBuyerCashBackBalance),
             fullyClosed: z(p.fullyClosed),
         },
         // Finance Sale breakdown
@@ -590,6 +612,7 @@ export const addBuyerPayment = async (id: string, payment: {
     vehicle.buyerPayments.push(paymentEntry);
     vehicle.activityLog.push({ action: "buyer_payment", description: `Buyer payment received: ₹${payment.amount.toLocaleString("en-IN")} via ${payment.type === "exchange" ? "Exchange" : payment.mode}${payment.type === "exchange" && payment.exchangeVehicleMake ? ` (${payment.exchangeVehicleMake}${payment.exchangeVehicleRegNo ? " — " + payment.exchangeVehicleRegNo : ""})` : ""}`, amount: payment.amount, date: new Date() });
     await vehicle.save();
+    await syncExchangeVehiclePurchasePayments(vehicle._id, "consignmentVehicles");
     return { vehicle, exchangeVehicle: exchangeVehicle ?? undefined };
 };
 
@@ -609,8 +632,10 @@ export const deleteBuyerPayment = async (id: string, paymentId: string, adminId:
         date: new Date(),
     });
     await vehicle.save();
+    await syncExchangeVehiclePurchasePayments(vehicle._id, "consignmentVehicles");
     return vehicle;
 };
+
 
 // ── Payee Payments ────────────────────────────────────────────────
 
@@ -707,11 +732,11 @@ export const getConsignmentReports = async (adminId: string, saleType?: string, 
 
     const [profitLoss, openSettlements, agingReport, monthlyTrends, costAnalysis] = await Promise.all([
         ConsignmentVehicle.find(soldMatch)
-            .select("consignmentId saleType vehicleType make model registrationNo dateReceived dateSold purchasePrice totalReconCost totalInvestment soldPrice receivedAmount buyerBalance paidToPayee payeeBalance grossMargin netProfit profitLossPercentage daysInShop previousOwner settlementStatus buyerPaymentStatus payeePaymentStatus")
+            .select("consignmentId saleType vehicleType make model registrationNo dateReceived dateSold purchasePrice totalReconCost totalInvestment soldPrice receivedAmount buyerBalance paidToPayee payeeBalance grossMargin netProfit profitLossPercentage daysInShop previousOwner settlementStatus buyerPaymentStatus payeePaymentStatus buyerCashBackDue buyerCashBackPaid buyerCashBackBalance")
             .sort({ dateSold: -1 })
             .lean(),
         ConsignmentVehicle.find({ ...match, dateSold: { $ne: null }, settlementStatus: { $ne: "fully_closed" } })
-            .select("consignmentId saleType make model registrationNo dateSold soldPrice receivedAmount buyerBalance paidToPayee payeeBalance buyerPaymentStatus payeePaymentStatus settlementStatus previousOwner")
+            .select("consignmentId saleType make model registrationNo dateSold soldPrice receivedAmount buyerBalance paidToPayee payeeBalance buyerPaymentStatus payeePaymentStatus settlementStatus previousOwner buyerCashBackDue buyerCashBackPaid buyerCashBackBalance")
             .sort({ dateSold: -1 })
             .lean(),
         // Aging report: compute daysInShop live so values never go stale
@@ -773,3 +798,61 @@ export const getConsignmentReports = async (adminId: string, saleType?: string, 
 
     return { profitLoss, openSettlements, agingReport, monthlyTrends: monthlyTrends[0], costAnalysis: costAnalysis[0] ?? {} };
 };
+
+// ── Buyer Cash-Back Payments ───────────────────────────────────────
+// Used when exchange value > sold price (over-trade). Shop owes buyer the difference.
+export const addBuyerCashBackPayment = async (
+    id: string,
+    adminId: string,
+    payload: { date: Date; amount: number; mode: string; notes?: string }
+) => {
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, adminId, isActive: true });
+    if (!vehicle) throw new Error("Consignment not found");
+    if (!vehicle.dateSold || !vehicle.soldPrice) throw new Error("Consignment has not been sold");
+    if (vehicle.buyerCashBackDue <= 0) throw new Error("No cash-back is due on this consignment");
+    if (payload.amount <= 0) throw new Error("Amount must be greater than 0");
+    if (payload.amount > (vehicle.buyerCashBackBalance ?? vehicle.buyerCashBackDue)) {
+        throw new Error(`Amount (₹${payload.amount}) exceeds remaining cash-back balance (₹${vehicle.buyerCashBackBalance})`);
+    }
+
+    (vehicle.buyerCashBackPayments as any[]).push({
+        date: payload.date,
+        amount: payload.amount,
+        mode: payload.mode,
+        notes: payload.notes,
+    });
+
+    vehicle.activityLog.push({
+        action: "buyer_cashback_payment",
+        description: `Cash-back payment of ₹${payload.amount} recorded via ${payload.mode}${payload.notes ? ` — ${payload.notes}` : ""}`,
+        amount: payload.amount,
+        date: new Date(),
+    });
+
+    await vehicle.save();
+    await syncExchangeVehiclePurchasePayments(vehicle._id, "consignmentVehicles");
+    return vehicle;
+};
+
+export const deleteBuyerCashBackPayment = async (id: string, adminId: string, paymentId: string) => {
+    const vehicle = await ConsignmentVehicle.findOne({ _id: id, adminId, isActive: true });
+    if (!vehicle) throw new Error("Consignment not found");
+
+    const idx = vehicle.buyerCashBackPayments.findIndex((p) => p._id.toString() === paymentId);
+    if (idx === -1) throw new Error("Cash-back payment not found");
+
+    const removed = vehicle.buyerCashBackPayments[idx];
+    vehicle.buyerCashBackPayments.splice(idx, 1);
+
+    vehicle.activityLog.push({
+        action: "buyer_cashback_payment_deleted",
+        description: `Cash-back payment of ₹${removed.amount} deleted`,
+        amount: removed.amount,
+        date: new Date(),
+    });
+
+    await vehicle.save();
+    await syncExchangeVehiclePurchasePayments(vehicle._id, "consignmentVehicles");
+    return vehicle;
+};
+

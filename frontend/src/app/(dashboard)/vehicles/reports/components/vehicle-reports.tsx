@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import axios from "@config/axios";
 import { formatINR } from "@lib/currency";
 import { cn } from "@/lib/utils";
-import { TrendingUp, TrendingDown, Package, DollarSign, BarChart3, AlertTriangle, ShoppingCart, ExternalLink, Calendar, X, Download, FileText, FileSpreadsheet, Loader2, ChevronDown, Filter } from "lucide-react";
+import { TrendingUp, TrendingDown, Package, DollarSign, BarChart3, AlertTriangle, ShoppingCart, ExternalLink, Calendar, X, Download, FileText, FileSpreadsheet, Loader2, ChevronDown, Filter, RefreshCcw } from "lucide-react";
 import Link from "next/link";
 import { formatDate } from "@lib/date";
 import { useState, useMemo } from "react";
@@ -145,10 +145,16 @@ const VehicleReports = () => {
         return pending.filter((v) => v.saleStatus && ["balance_pending", "noc_pending", "noc_cash_pending"].includes(v.saleStatus));
     }, [pending]);
 
+    const cashbackPending = useMemo(() => {
+        return pending.filter((v) => v.saleStatus === "cashback_pending");
+    }, [pending]);
+
     // ── Client-side pagination slices ────────────────────────────────
+    const [cashbackPage, setCashbackPage] = useState(1);
     const duePaged     = purchaseDue.slice((duePage - 1) * RPT_PAGE_SIZE, duePage * RPT_PAGE_SIZE);
     const pendingPaged = salePending.slice((pendingPage - 1) * RPT_PAGE_SIZE, pendingPage * RPT_PAGE_SIZE);
     const plPaged      = plReport.slice((plPage - 1) * RPT_PAGE_SIZE, plPage * RPT_PAGE_SIZE);
+    const cashbackPaged = cashbackPending.slice((cashbackPage - 1) * RPT_PAGE_SIZE, cashbackPage * RPT_PAGE_SIZE);
 
     const statSizeClass = (val: string): string => {
         const len = val.length;
@@ -431,6 +437,65 @@ const VehicleReports = () => {
                             total={salePending.length}
                             limit={RPT_PAGE_SIZE}
                             onPageChange={setPendingPage}
+                        />
+                    </div>
+                )}
+            </div>
+
+            {/* ── Cash-Back Owed to Buyers ─────────────────────────────── */}
+            <div>
+                <div className="flex items-center gap-2 mb-3">
+                    <RefreshCcw className="h-4 w-4 text-violet-400" />
+                    <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Cash-Back Owed to Buyers</p>
+                    {cashbackPending.length > 0 && (
+                        <span className="text-xs font-bold text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded-full">
+                            {cashbackPending.length} vehicle{cashbackPending.length !== 1 ? "s" : ""}
+                        </span>
+                    )}
+                </div>
+                {pendingLoading ? (
+                    <div className="h-40 rounded-xl bg-muted/40 animate-pulse" />
+                ) : cashbackPending.length === 0 ? (
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-6 text-center">
+                        <p className="text-emerald-400 font-semibold text-sm">✅ No cash-back owed to any buyer</p>
+                        <p className="text-xs text-muted-foreground mt-1">All exchange deals are within sold price — no over-trade liability.</p>
+                    </div>
+                ) : (
+                    <div className="rounded-xl border border-violet-500/20 bg-card overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm min-w-[600px]">
+                                <thead>
+                                    <tr className="border-b border-border bg-violet-500/5">
+                                        {["Vehicle", "Reg. No.", "Buyer", "Sold Price", "Exchange Value", "Cash-Back Due", "Still Owed"].map((h) => (
+                                            <th key={h} className={cn("px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider whitespace-nowrap",
+                                                ["Sold Price", "Exchange Value", "Cash-Back Due", "Still Owed"].includes(h) ? "text-right" : "text-left")}>{h}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-border">
+                                    {cashbackPaged.map((v) => (
+                                        <tr key={v._id} className="hover:bg-muted/10 transition-colors">
+                                            <td className="px-4 py-3">
+                                                <p className="font-semibold text-foreground whitespace-nowrap">{v.make} {v.model}</p>
+                                                <p className="text-xs text-muted-foreground">{v.vehicleId}</p>
+                                            </td>
+                                            <td className="px-4 py-3 text-xs font-mono text-foreground whitespace-nowrap">{v.registrationNo}</td>
+                                            <td className="px-4 py-3 text-sm text-foreground whitespace-nowrap">{v.soldTo || "—"}</td>
+                                            <td className="px-4 py-3 text-right text-sm font-medium text-foreground whitespace-nowrap font-mono">{formatINR(v.soldPrice || 0)}</td>
+                                            <td className="px-4 py-3 text-right text-sm font-medium text-orange-400 whitespace-nowrap font-mono">{formatINR(v.receivedAmount || 0)}</td>
+                                            <td className="px-4 py-3 text-right text-sm font-bold text-violet-400 whitespace-nowrap font-mono">{formatINR(v.buyerCashBackDue || 0)}</td>
+                                            <td className="px-4 py-3 text-right text-sm font-bold text-red-400 whitespace-nowrap font-mono">{formatINR(v.buyerCashBackBalance || 0)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <TablePagination
+                            page={cashbackPage}
+                            totalPages={Math.max(1, Math.ceil(cashbackPending.length / RPT_PAGE_SIZE))}
+                            total={cashbackPending.length}
+                            limit={RPT_PAGE_SIZE}
+                            onPageChange={setCashbackPage}
                         />
                     </div>
                 )}

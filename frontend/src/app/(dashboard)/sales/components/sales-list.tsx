@@ -16,7 +16,7 @@ import {
     Eye, AlertTriangle, Search, ArrowLeftRight, Car, Building2,
     IndianRupee, CheckCircle2, Clock, Filter, User,
     Download, FileText, FileSpreadsheet, Loader2, ChevronDown,
-    Calendar, X
+    Calendar, X, RefreshCcw
 } from "lucide-react";
 import VehicleTypeIcon from "../../vehicles/components/vehicle-type-icon";
 import { Badge } from "@/components/ui/badge";
@@ -80,6 +80,9 @@ const SaleStatusBadge = ({ status }: { status: string }) => {
     }
     if (status === "noc_cash_pending") {
         return <Badge className="bg-red-500/10 text-red-400 border-red-500/20 text-[10px]"><AlertTriangle className="h-2.5 w-2.5 mr-1" />NOC & Balance Pending</Badge>;
+    }
+    if (status === "cashback_pending") {
+        return <Badge className="bg-violet-500/10 text-violet-400 border-violet-500/20 text-[10px]"><RefreshCcw className="h-2.5 w-2.5 mr-1" />Cash-Back Due</Badge>;
     }
     return <Badge className="bg-muted/50 text-muted-foreground text-[10px]">{status.replace(/_/g, " ")}</Badge>;
 };
@@ -275,9 +278,27 @@ const SalesList = ({ initialData }: SalesListProps) => {
             {stats && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <StatCard label="Total Revenue" value={formatINR(stats.totalRevenue)} sub={`${stats.totalSales} sales`} icon={IndianRupee} bg="bg-card border-border" />
-                    <StatCard label="Total Received" value={formatINR(stats.totalReceived)} color="text-emerald-400" bg="bg-emerald-500/5 border-emerald-500/20" icon={CheckCircle2} />
+                    <StatCard label="Total Collected" value={formatINR(stats.totalReceived)} sub="Revenue collected (excl. excess exchange)" color="text-emerald-400" bg="bg-emerald-500/5 border-emerald-500/20" icon={CheckCircle2} />
                     <StatCard label="Outstanding" value={formatINR(stats.totalBalance)} sub={`${stats.pendingCount} pending`} color="text-red-400" bg="bg-red-500/5 border-red-500/20" icon={Clock} />
                     <StatCard label="Total Profit" value={formatINR(stats.totalProfit)} color={stats.totalProfit >= 0 ? "text-emerald-400" : "text-red-400"} bg={stats.totalProfit >= 0 ? "bg-emerald-500/5 border-emerald-500/20" : "bg-red-500/5 border-red-500/20"} icon={stats.totalProfit >= 0 ? TrendingUp : TrendingDown} />
+                </div>
+            )}
+
+            {/* Cash-back owed stat (only visible when >0) */}
+            {stats && stats.cashbackCount > 0 && (
+                <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <RefreshCcw className="h-4 w-4 shrink-0 text-violet-400" />
+                        <div>
+                            <p className="text-sm font-semibold text-violet-300">
+                                <strong>{stats.cashbackCount}</strong> sale{stats.cashbackCount !== 1 ? "s" : ""} with cash-back owed to buyers.
+                            </p>
+                            <p className="text-xs text-violet-400/70 mt-0.5">
+                                Total cash-back still to return: <strong className="text-violet-300">{formatINR(stats.totalCashbackOwed)}</strong>
+                                <span className="ml-2 text-violet-500/60">· Exchange value exceeded sold price on these deals</span>
+                            </p>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -299,7 +320,7 @@ const SalesList = ({ initialData }: SalesListProps) => {
                 </div>
             )}
 
-            {/* Pending alert */}
+            {/* Pending balance alert */}
             {stats && stats.pendingCount > 0 && (
                 <div className="flex items-center gap-3 rounded-xl border border-orange-500/20 bg-orange-500/5 px-4 py-3">
                     <AlertTriangle className="h-4 w-4 shrink-0 text-orange-400" />
@@ -342,6 +363,7 @@ const SalesList = ({ initialData }: SalesListProps) => {
                             <SelectItem value="fully_received">✅ Fully Received</SelectItem>
                             <SelectItem value="balance_pending">⏳ Balance Pending</SelectItem>
                             <SelectItem value="noc_pending">📄 NOC Pending</SelectItem>
+                            <SelectItem value="cashback_pending">🔄 Cash-Back Due</SelectItem>
                         </SelectContent>
                     </Select>
                     <Select value={exchangeFilter} onValueChange={(v) => { setExchangeFilter(v); resetPage(); }}>
@@ -433,15 +455,20 @@ const SalesList = ({ initialData }: SalesListProps) => {
                         records.map((r) => {
                             const isProfit = r.profitLoss >= 0;
                             const href = `/${r.source === "vehicle" ? "vehicles" : "consignments"}/${r._id}`;
-                            const paidPct = r.soldPrice > 0 ? (r.receivedAmount / r.soldPrice) * 100 : 100;
+                            // Effective received = amount collected against sold price (capped at soldPrice for over-trade)
+                            const effectiveReceived = Math.min(r.receivedAmount, r.soldPrice);
+                            const paidPct = r.soldPrice > 0 ? (effectiveReceived / r.soldPrice) * 100 : 100;
+                            const isCashBackPending = (r.buyerCashBackBalance ?? 0) > 0;
 
                             return (
                                 <Link key={r._id} href={href} className="group relative flex flex-col rounded-2xl border border-border/60 bg-gradient-to-b from-card to-muted/10 p-5 shadow-sm hover:shadow-md hover:border-primary/30 transition-all overflow-hidden">
                                     {/* Decorative glow */}
                                     <div className="absolute top-0 right-0 -mt-4 -mr-4 h-24 w-24 rounded-full bg-primary/10 blur-2xl opacity-50 group-hover:opacity-100 transition-opacity pointer-events-none" />
 
-                                    {/* Status top bar */}
-                                    {r.balanceAmount > 0 ? (
+                                    {/* Status top bar: violet for cash-back pending, orange for balance pending, green for settled */}
+                                    {isCashBackPending ? (
+                                        <div className="absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-violet-400 to-purple-500" />
+                                    ) : r.balanceAmount > 0 ? (
                                         <div className="absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-orange-400 to-red-500" />
                                     ) : (
                                         <div className="absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-emerald-400 to-emerald-500" />
@@ -502,8 +529,16 @@ const SalesList = ({ initialData }: SalesListProps) => {
                                         {/* Progress Bar & Balances */}
                                         <div>
                                             <div className="flex justify-between text-[11px] font-bold mb-1.5">
-                                                <span className="text-emerald-500">Recv: {formatINR(r.receivedAmount)}</span>
-                                                <span className={r.balanceAmount > 0 ? "text-red-500" : "text-emerald-500"}>Bal: {formatINR(r.balanceAmount)}</span>
+                                                <span className="text-emerald-500">Recv: {formatINR(effectiveReceived)}
+                                                    {r.buyerCashBackDue > 0 && (
+                                                        <span className="ml-1 text-[10px] text-orange-400 font-normal">(Exch)</span>
+                                                    )}
+                                                </span>
+                                                {isCashBackPending ? (
+                                                    <span className="text-violet-400">-{formatINR(r.buyerCashBackBalance)} due</span>
+                                                ) : (
+                                                    <span className={r.balanceAmount > 0 ? "text-red-500" : "text-emerald-500"}>Bal: {formatINR(r.balanceAmount)}</span>
+                                                )}
                                             </div>
                                             <div className="relative h-1.5 w-full rounded-full bg-muted/80 overflow-hidden">
                                                 <div
@@ -531,8 +566,8 @@ const SalesList = ({ initialData }: SalesListProps) => {
                                 <th className="px-4 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider">Vehicle</th>
                                 <th className="px-4 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider">Buyer</th>
                                 <th className="px-4 py-3 text-right text-xs font-bold text-muted-foreground uppercase tracking-wider">Sold At</th>
-                                <th className="px-4 py-3 text-right text-xs font-bold text-muted-foreground uppercase tracking-wider">Received</th>
-                                <th className="px-4 py-3 text-right text-xs font-bold text-muted-foreground uppercase tracking-wider">Balance</th>
+                                <th className="px-4 py-3 text-right text-xs font-bold text-muted-foreground uppercase tracking-wider">Collected</th>
+                                <th className="px-4 py-3 text-right text-xs font-bold text-muted-foreground uppercase tracking-wider">Balance / CB</th>
                                 <th className="px-4 py-3 text-right text-xs font-bold text-muted-foreground uppercase tracking-wider">P&L</th>
                                 <th className="px-4 py-3 text-center text-xs font-bold text-muted-foreground uppercase tracking-wider">Status</th>
                                 <th className="px-4 py-3 text-center text-xs font-bold text-muted-foreground uppercase tracking-wider">View</th>
@@ -555,10 +590,12 @@ const SalesList = ({ initialData }: SalesListProps) => {
                                     </td>
                                 </tr>
                             ) : (
-                                records.map((r) => {
-                                    const isProfit = r.profitLoss >= 0;
-                                    const href = `/${r.source === "vehicle" ? "vehicles" : "consignments"}/${r._id}`;
-                                    return (
+                                        records.map((r) => {
+                                        const isProfit = r.profitLoss >= 0;
+                                        const href = `/${r.source === "vehicle" ? "vehicles" : "consignments"}/${r._id}`;
+                                        // Effective received = amount collected against sold price (capped at soldPrice for over-trade)
+                                        const effectiveReceived = Math.min(r.receivedAmount, r.soldPrice);
+                                        return (
                                         <tr key={r._id} className="hover:bg-muted/20 transition-colors group cursor-pointer" onClick={() => window.location.href = href}>
                                             <td className="px-4 py-3">
                                                 <div className="flex flex-col gap-1">
@@ -594,12 +631,27 @@ const SalesList = ({ initialData }: SalesListProps) => {
                                                 {formatINR(r.soldPrice)}
                                             </td>
                                             <td className="px-4 py-3 text-right text-emerald-400 font-semibold whitespace-nowrap font-mono">
-                                                {formatINR(r.receivedAmount)}
+                                                {r.buyerCashBackDue > 0 ? (
+                                                    <div className="text-right">
+                                                        <p className="text-emerald-400 font-mono">{formatINR(effectiveReceived)}</p>
+                                                        <p className="text-[10px] text-orange-400/80 font-normal">Exch: {formatINR(r.receivedAmount)}</p>
+                                                    </div>
+                                                ) : (
+                                                    formatINR(effectiveReceived)
+                                                )}
                                             </td>
                                             <td className="px-4 py-3 text-right whitespace-nowrap">
-                                                <span className={cn("font-semibold", r.balanceAmount > 0 ? "text-red-400" : "text-emerald-400")}>
-                                                    {formatINR(r.balanceAmount)}
-                                                </span>
+                                                {r.buyerCashBackBalance > 0 ? (
+                                                    <div className="text-right">
+                                                        <span className="text-xs font-semibold text-emerald-400">✓ Settled</span>
+                                                        <p className="font-bold text-violet-400 font-mono text-sm">-{formatINR(r.buyerCashBackBalance)}</p>
+                                                        <p className="text-[10px] text-violet-500/80">cash-back owed</p>
+                                                    </div>
+                                                ) : (
+                                                    <span className={cn("font-semibold", r.balanceAmount > 0 ? "text-red-400" : "text-emerald-400")}>
+                                                        {formatINR(r.balanceAmount)}
+                                                    </span>
+                                                )}
                                             </td>
                                             <td className="px-4 py-3 text-right whitespace-nowrap">
                                                 <span className={cn("flex items-center justify-end gap-1 text-xs font-semibold", isProfit ? "text-emerald-400" : "text-red-400")}>
