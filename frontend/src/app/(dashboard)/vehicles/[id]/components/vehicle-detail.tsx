@@ -287,6 +287,11 @@ const RecordCashBackDialog = ({ vehicle }: { vehicle: IVehicle }) => {
             toast.success("Cash-back payment recorded!", { id: tid });
             queryClient.invalidateQueries({ queryKey: ["vehicle", vehicle._id] });
             queryClient.invalidateQueries({ queryKey: ["vehicles"] });
+            queryClient.invalidateQueries({ queryKey: ["consignments"] });
+            queryClient.invalidateQueries({ queryKey: ["exchanges"] });
+            queryClient.invalidateQueries({ queryKey: ["exchange-stats"] });
+            queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+            queryClient.invalidateQueries({ queryKey: ["vehicle-reports"] });
             form.reset({ date: new Date().toISOString().split("T")[0], amount: 0, mode: "Cash", notes: "" });
             setOpen(false);
         },
@@ -1378,6 +1383,10 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
             // or restore a consignment, so both lists need refreshing
             queryClient.invalidateQueries({ queryKey: ["vehicles"] });
             queryClient.invalidateQueries({ queryKey: ["consignments"] });
+            queryClient.invalidateQueries({ queryKey: ["exchanges"] });
+            queryClient.invalidateQueries({ queryKey: ["exchange-stats"] });
+            queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+            queryClient.invalidateQueries({ queryKey: ["vehicle-reports"] });
         },
     });
 
@@ -2245,12 +2254,38 @@ const VehicleDetail = ({ id, initialData }: { id: string; initialData: IVehicle 
                                                             </div>
                                                         </div>
                                                         <AdminOnly>
-                                                            <button
-                                                                onClick={() => deletePayment({ type: "cashback", paymentId: cbp._id })}
-                                                                className="text-muted-foreground hover:text-destructive transition-colors p-1 cursor-pointer"
-                                                            >
-                                                                <Trash2 className="h-3.5 w-3.5" />
-                                                            </button>
+                                                            <AlertDialog>
+                                                                <AlertDialogTrigger asChild>
+                                                                    <button className="text-muted-foreground hover:text-destructive transition-colors p-1 cursor-pointer" title="Delete cash-back payment">
+                                                                        <Trash2 className="h-3.5 w-3.5" />
+                                                                    </button>
+                                                                </AlertDialogTrigger>
+                                                                <AlertDialogContent className="w-[96vw] max-w-sm rounded-3xl bg-card border-border p-0 overflow-hidden gap-0 sm:w-full shadow-2xl">
+                                                                    <div className="relative overflow-hidden bg-red-500/5 border-b border-red-500/10 px-6 pt-6 pb-5">
+                                                                        <div className="absolute -top-12 -right-12 h-32 w-32 rounded-full bg-red-500/20 blur-[40px] pointer-events-none" />
+                                                                        <div className="relative flex items-center gap-4">
+                                                                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-500/10 border border-red-500/20">
+                                                                                <Trash2 className="h-5 w-5 text-red-500" />
+                                                                            </div>
+                                                                            <AlertDialogTitle className="text-foreground text-base font-bold">Delete Cash-Back?</AlertDialogTitle>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="px-6 py-5 text-center space-y-3">
+                                                                        <div className="rounded-xl border border-border bg-muted/30 p-3">
+                                                                            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-0.5">CASH-BACK PAYMENT</p>
+                                                                            <p className="text-lg font-bold text-foreground">{formatCurrency(cbp.amount)}</p>
+                                                                            <p className="text-[11px] text-muted-foreground font-mono">via {cbp.mode}</p>
+                                                                        </div>
+                                                                        <AlertDialogDescription className="text-xs text-muted-foreground">
+                                                                            Are you sure you want to permanently remove this cash-back payment record?
+                                                                        </AlertDialogDescription>
+                                                                    </div>
+                                                                    <AlertDialogFooter className="px-6 pb-6 pt-0 flex-col sm:flex-row gap-3">
+                                                                        <AlertDialogCancel className="w-full sm:w-1/2 border-border hover:bg-muted m-0">Cancel</AlertDialogCancel>
+                                                                        <AlertDialogAction onClick={() => deletePayment({ type: "cashback", paymentId: cbp._id })} className="w-full sm:w-1/2 bg-red-500 hover:bg-red-600 text-white m-0">Delete</AlertDialogAction>
+                                                                    </AlertDialogFooter>
+                                                                </AlertDialogContent>
+                                                            </AlertDialog>
                                                         </AdminOnly>
                                                     </div>
                                                 ))}

@@ -366,8 +366,10 @@ ConsignmentVehicleSchema.pre("save", function (next) {
 
     // 4. Payee Payment Status
     this.paidToPayee = this.payeePayments.reduce((s, p) => s + p.amount, 0);
-    this.payeeBalance = Math.max(0, (this.soldPrice || 0) - this.totalReconCost - this.paidToPayee);
-    if (this.payeePaymentStatus !== "closed") {
+    if (this.payeePaymentStatus === "closed") {
+        this.payeeBalance = 0;
+    } else {
+        this.payeeBalance = Math.max(0, (this.soldPrice || 0) - this.totalReconCost - this.paidToPayee);
         if (this.payeePayments.length === 0) {
             this.payeePaymentStatus = "not_started";
         } else if (this.payeeBalance <= 0) {

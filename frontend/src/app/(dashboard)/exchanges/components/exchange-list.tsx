@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TablePagination } from "@components/shared";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 
 const PAGE_SIZE = 10;
 
@@ -62,6 +63,7 @@ interface ExchangeStats {
     totalExchanges: number;
     totalExchangeValue: number;
     totalRemainingBalance: number;
+    totalBuyerCashBackBalance: number;
     exchangesFromVehicles: number;
     exchangesFromConsignments: number;
     fullySettled: number;
@@ -102,19 +104,24 @@ const statSizeClass = (val: string): string => {
 };
 
 // ── Stat Card ─────────────────────────────────────────────────────────────────
-const StatCard = ({ label, value, sub, icon: Icon, color }: {
+const StatCard = ({ label, value, sub, icon: Icon, color, tooltip }: {
     label: string; value: string; sub?: string;
     icon: React.ComponentType<{ className?: string }>;
     color: string;
+    tooltip?: React.ReactNode;
 }) => {
     const sizeClass = statSizeClass(value);
-    return (
-        <div className="relative rounded-2xl border border-border bg-card p-4 sm:p-5 pr-4 sm:pr-16 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+    
+    const cardContent = (
+        <div className="relative rounded-2xl border border-border bg-card p-4 sm:p-5 pr-4 sm:pr-16 shadow-sm hover:shadow-md transition-shadow overflow-hidden h-full">
             {/* Icon absolutely positioned top-right */}
             <div className={cn("absolute top-3 sm:top-4 right-3 sm:right-4 flex h-8 w-8 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-lg sm:rounded-xl shadow-inner", color)}>
                 <Icon className="h-4 w-4 sm:h-5 sm:w-5 text-white" />
             </div>
-            <p className="text-[10px] sm:text-[11px] uppercase tracking-widest font-bold text-muted-foreground mb-1 pr-8 sm:pr-0 truncate">{label}</p>
+            <p className="text-[10px] sm:text-[11px] uppercase tracking-widest font-bold text-muted-foreground mb-1 pr-8 sm:pr-0 truncate flex items-center gap-1.5">
+                {label}
+                {tooltip && <span className="text-[10px] text-muted-foreground/50 font-normal cursor-help">ⓘ</span>}
+            </p>
             <p
                 title={value}
                 className={cn("font-mono font-bold tabular-nums whitespace-nowrap overflow-hidden leading-tight text-foreground pr-8 sm:pr-0", sizeClass)}
@@ -124,6 +131,23 @@ const StatCard = ({ label, value, sub, icon: Icon, color }: {
             {sub && <p className="text-[11px] sm:text-xs text-muted-foreground mt-0.5 pr-8 sm:pr-0 truncate">{sub}</p>}
         </div>
     );
+
+    if (tooltip) {
+        return (
+            <TooltipProvider>
+                <Tooltip delayDuration={150}>
+                    <TooltipTrigger asChild>
+                        <div className="cursor-help h-full">{cardContent}</div>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="center" className="bg-card border border-border p-3.5 rounded-xl shadow-xl max-w-xs text-xs space-y-2 select-none z-50">
+                        {tooltip}
+                    </TooltipContent>
+                </Tooltip>
+            </TooltipProvider>
+        );
+    }
+
+    return cardContent;
 };
 
 // ── Source Vehicle Cell ───────────────────────────────────────────────────────
@@ -196,13 +220,33 @@ const ExchangeCell = ({ deal }: { deal: ExchangeDeal }) => {
 
 // ── Settlement Cell ───────────────────────────────────────────────────────────
 const SettlementCell = ({ deal }: { deal: ExchangeDeal }) => {
-    const hasCashBack = (deal.buyerCashBackBalance ?? 0) > 0;
+    const isPendingCashBack = (deal.buyerCashBackBalance ?? 0) > 0;
+    const hasCashBack = (deal.buyerCashBackDue ?? 0) > 0;
     
     // Effective received capped at sold price
     const effectiveReceived = Math.min(deal.sourceTotalReceived, deal.sourceSoldPrice);
-    const pct = deal.sourceSoldPrice > 0
+    const receivePct = deal.sourceSoldPrice > 0
         ? Math.min(100, (effectiveReceived / deal.sourceSoldPrice) * 100)
         : 0;
+
+    // Cashback progress
+    const cashBackPaid = deal.buyerCashBackPaid ?? 0;
+    const cashBackDue = deal.buyerCashBackDue ?? 0;
+    const cashBackPct = cashBackDue > 0
+        ? Math.min(100, (cashBackPaid / cashBackDue) * 100)
+        : 0;
+
+    // Determine displayed progress percentage & bar color
+    const displayPct = hasCashBack ? cashBackPct : receivePct;
+    const progressColor = deal.isFullySettled
+        ? "bg-emerald-500"
+        : isPendingCashBack
+            ? "bg-violet-500 shadow-[0_0_8px_rgba(139,92,246,0.3)]"
+            : "bg-orange-500";
+
+    const labelText = hasCashBack
+        ? `${cashBackPct.toFixed(0)}% paid back`
+        : `${receivePct.toFixed(0)}% received`;
 
     return (
         <div className="min-w-[160px]">
@@ -211,7 +255,7 @@ const SettlementCell = ({ deal }: { deal: ExchangeDeal }) => {
                     <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px] gap-1">
                         <CheckCircle2 className="h-2.5 w-2.5" />Settled
                     </Badge>
-                ) : hasCashBack ? (
+                ) : isPendingCashBack ? (
                     <Badge className="bg-violet-500/10 text-violet-400 border-violet-500/20 text-[10px] gap-1">
                         <RefreshCw className="h-2.5 w-2.5 mr-1" />Cash-Back Due
                     </Badge>
@@ -238,7 +282,7 @@ const SettlementCell = ({ deal }: { deal: ExchangeDeal }) => {
                 )}
                 <div className="flex justify-between font-bold border-t border-border/60 pt-1">
                     <span className="text-muted-foreground">Balance</span>
-                    {hasCashBack ? (
+                    {isPendingCashBack ? (
                         <span className="text-violet-400 font-mono">
                             -{formatINR(deal.buyerCashBackBalance || 0)}
                         </span>
@@ -248,17 +292,17 @@ const SettlementCell = ({ deal }: { deal: ExchangeDeal }) => {
                         </span>
                     )}
                 </div>
-                {hasCashBack && (
+                {isPendingCashBack && (
                     <p className="text-[9px] text-violet-400/80 text-right mt-0.5">cash-back owed</p>
                 )}
             </div>
             <div className="mt-2 h-1.5 bg-muted/40 rounded-full overflow-hidden">
                 <div
-                    className={cn("h-full rounded-full transition-all", deal.isFullySettled ? "bg-emerald-500" : "bg-orange-500")}
-                    style={{ width: `${pct}%` }}
+                    className={cn("h-full rounded-full transition-all", progressColor)}
+                    style={{ width: `${displayPct}%` }}
                 />
             </div>
-            <p className="text-[10px] text-muted-foreground mt-0.5">{pct.toFixed(0)}% received</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{labelText}</p>
         </div>
     );
 };
@@ -456,10 +500,39 @@ export default function ExchangeList() {
                     />
                     <StatCard
                         label="Pending Balance"
-                        value={formatINR(stats.totalRemainingBalance)}
-                        sub={`${stats.pendingSettlement} deals pending cash`}
+                        value={
+                            stats.totalRemainingBalance > 0 || stats.totalBuyerCashBackBalance > 0
+                                ? formatINR(stats.totalRemainingBalance - stats.totalBuyerCashBackBalance)
+                                : "₹0"
+                        }
+                        sub={
+                            stats.totalRemainingBalance > 0 || stats.totalBuyerCashBackBalance > 0
+                                ? `${formatINR(stats.totalRemainingBalance)} owed to shop · ${formatINR(stats.totalBuyerCashBackBalance)} cashback due`
+                                : "All payments fully settled"
+                        }
                         icon={AlertCircle}
                         color="bg-gradient-to-br from-amber-500 to-orange-600"
+                        tooltip={
+                            stats.totalRemainingBalance > 0 || stats.totalBuyerCashBackBalance > 0 ? (
+                                <div className="space-y-1.5 font-sans">
+                                    <p className="font-bold text-foreground mb-1.5 text-xs border-b border-border/60 pb-1">Pending Balance Breakdown</p>
+                                    <div className="flex justify-between gap-4">
+                                        <span className="text-muted-foreground">Owed by Buyers (Inflow):</span>
+                                        <span className="font-mono font-semibold text-emerald-400">+{formatINR(stats.totalRemainingBalance)}</span>
+                                    </div>
+                                    <div className="flex justify-between gap-4">
+                                        <span className="text-muted-foreground">Owed to Buyers (Outflow):</span>
+                                        <span className="font-mono font-semibold text-violet-400">-{formatINR(stats.totalBuyerCashBackBalance)}</span>
+                                    </div>
+                                    <div className="flex justify-between gap-4 border-t border-border/60 pt-1 mt-1 font-bold">
+                                        <span className="text-foreground">Net Pending Balance:</span>
+                                        <span className={cn("font-mono", (stats.totalRemainingBalance - stats.totalBuyerCashBackBalance) >= 0 ? "text-emerald-400" : "text-violet-400")}>
+                                            {formatINR(stats.totalRemainingBalance - stats.totalBuyerCashBackBalance)}
+                                        </span>
+                                    </div>
+                                </div>
+                            ) : undefined
+                        }
                     />
                     <StatCard
                         label="Fully Settled"

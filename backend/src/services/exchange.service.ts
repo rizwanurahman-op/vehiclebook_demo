@@ -45,6 +45,7 @@ export interface ExchangeStats {
     totalExchanges: number;
     totalExchangeValue: number;
     totalRemainingBalance: number;
+    totalBuyerCashBackBalance: number;
     exchangesFromVehicles: number;
     exchangesFromConsignments: number;
     fullySettled: number;
@@ -256,6 +257,7 @@ export const getExchangeStats = async (query: StatsQuery & { adminId?: string } 
         totalExchanges: all.length,
         totalExchangeValue: all.reduce((s, d) => s + d.exchangeAmount, 0),
         totalRemainingBalance: all.reduce((s, d) => s + d.sourceRemainingBalance, 0),
+        totalBuyerCashBackBalance: all.reduce((s, d) => s + (d.buyerCashBackBalance || 0), 0),
         exchangesFromVehicles: vDeals.length,
         exchangesFromConsignments: cDeals.length,
         fullySettled: all.filter(d => d.isFullySettled).length,

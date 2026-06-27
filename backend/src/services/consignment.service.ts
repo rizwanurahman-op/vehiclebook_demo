@@ -256,8 +256,19 @@ export const getConsignmentStats = async (query: { saleType?: string; vehicleTyp
                 pendingBuyerCashBackCount: { $sum: { $cond: [{ $gt: ["$buyerCashBackBalance", 0] }, 1, 0] } },
                 // Payee payment tracking (Owner for park_sale, Finance for finance_sale)
                 totalPaidToPayee: { $sum: { $ifNull: ["$paidToPayee", 0] } },
-                // Only sum payee balance from sold vehicles (unsold vehicles don't have an outstanding owner liability yet)
-                totalPayeeBalance: { $sum: { $cond: [{ $in: ["$status", ["sold", "sold_pending"]] }, { $ifNull: ["$payeeBalance", 0] }, 0] } },
+                // Only sum payee balance from sold vehicles where payee payments are not closed
+                totalPayeeBalance: {
+                    $sum: {
+                        $cond: [
+                            { $and: [
+                                { $in: ["$status", ["sold", "sold_pending"]] },
+                                { $ne: ["$payeePaymentStatus", "closed"] }
+                            ] },
+                            { $ifNull: ["$payeeBalance", 0] },
+                            0
+                        ]
+                    }
+                },
                 // Only count sold vehicles with unpaid payee balance as "pending"
                 pendingPayeeCount: { $sum: { $cond: [{ $and: [{ $in: ["$status", ["sold", "sold_pending"]] }, { $in: ["$payeePaymentStatus", ["not_started", "partial"]] }] }, 1, 0] } },
                 // Settlement
@@ -432,6 +443,53 @@ export const undoSale = async (id: string, adminId: string): Promise<IConsignmen
     const filter: Record<string, unknown> = { _id: id, isActive: true, adminId: new mongoose.Types.ObjectId(adminId) };
     const vehicle = await ConsignmentVehicle.findOne(filter);
     if (!vehicle) return null;
+
+    // ── Restore exchange vehicles/consignments to their original state ──
+    const exchangeRefs = vehicle.buyerPayments
+        .filter((p) => p.exchangeCreatedRef)
+        .map((p) => ({ ref: p.exchangeCreatedRef!, collection: p.exchangeCreatedIn }));
+
+    for (const { ref, collection } of exchangeRefs) {
+        if (collection === "vehicles") {
+            const exVehicle = await Vehicle.findById(ref);
+            if (exVehicle) {
+                const originalConsignment = await ConsignmentVehicle.findOne({
+                    registrationNo: exVehicle.registrationNo,
+                    isActive: false,
+                    "activityLog.action": "migrated",
+                });
+
+                if (originalConsignment) {
+                    originalConsignment.isActive = true;
+                    originalConsignment.activityLog.push({
+                        action: "restored",
+                        description: `Restored: migration reversed when parent consignment sale of ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo}) was reverted`,
+                        date: new Date(),
+                    });
+                    await originalConsignment.save();
+                }
+
+                exVehicle.isActive = false;
+                exVehicle.activityLog.push({
+                    action: "reverted",
+                    description: `Deactivated: parent consignment sale undone for ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo})`,
+                    date: new Date(),
+                });
+                await exVehicle.save();
+            }
+        } else if (collection === "consignmentVehicles") {
+            const exConsignment = await ConsignmentVehicle.findById(ref);
+            if (exConsignment) {
+                exConsignment.isActive = false;
+                exConsignment.activityLog.push({
+                    action: "reverted",
+                    description: `Deactivated: parent consignment sale undone for ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo})`,
+                    date: new Date(),
+                });
+                await exConsignment.save();
+            }
+        }
+    }
 
     vehicle.dateSold = undefined;
     vehicle.soldPrice = undefined;
@@ -622,6 +680,54 @@ export const deleteBuyerPayment = async (id: string, paymentId: string, adminId:
     const vehicle = await ConsignmentVehicle.findOne(filter);
     if (!vehicle) return null;
     const deleted = vehicle.buyerPayments.find(p => p._id.toString() === paymentId);
+
+    // ── Handle any exchange vehicle/consignment linked to this payment ──
+    if (deleted?.exchangeCreatedRef && deleted?.exchangeCreatedIn) {
+        const collection = deleted.exchangeCreatedIn;
+        const ref = deleted.exchangeCreatedRef;
+
+        if (collection === "vehicles") {
+            const exVehicle = await Vehicle.findById(ref);
+            if (exVehicle) {
+                // Check if this exchange vehicle was migrated from a consignment
+                const originalConsignment = await ConsignmentVehicle.findOne({
+                    registrationNo: exVehicle.registrationNo,
+                    isActive: false,
+                    "activityLog.action": "migrated",
+                });
+                if (originalConsignment) {
+                    // Restore the original consignment
+                    originalConsignment.isActive = true;
+                    originalConsignment.activityLog.push({
+                        action: "restored",
+                        description: `Restored: exchange payment removed from sale of consignment ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo})`,
+                        date: new Date(),
+                    });
+                    await originalConsignment.save();
+                }
+                // Soft-delete the exchange vehicle
+                exVehicle.isActive = false;
+                exVehicle.activityLog.push({
+                    action: "removed",
+                    description: `Deactivated: exchange payment deleted from sale of consignment ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo})`,
+                    date: new Date(),
+                });
+                await exVehicle.save();
+            }
+        } else if (collection === "consignmentVehicles") {
+            const exConsignment = await ConsignmentVehicle.findById(ref);
+            if (exConsignment) {
+                exConsignment.isActive = false;
+                exConsignment.activityLog.push({
+                    action: "removed",
+                    description: `Deactivated: exchange payment deleted from sale of consignment ${vehicle.make} ${vehicle.model} (${vehicle.registrationNo})`,
+                    date: new Date(),
+                });
+                await exConsignment.save();
+            }
+        }
+    }
+
     vehicle.buyerPayments = vehicle.buyerPayments.filter(p => p._id.toString() !== paymentId);
     vehicle.activityLog.push({
         action: "buyer_payment_deleted",
