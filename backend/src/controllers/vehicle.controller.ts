@@ -197,10 +197,11 @@ export const exportProfitLoss = async (req: AuthRequest, res: Response): Promise
         const dINR = (n: unknown) => n == null ? "—" : `Rs. ${Math.abs(n as number).toLocaleString("en-IN")}`;
         const getSaleStatusLabel = (s: string | null | undefined) => {
             if (!s) return "—";
-            if (s === "fully_received") return "Fully Received";
-            if (s === "balance_pending") return "Balance Pending";
-            if (s === "noc_pending") return "NOC Pending";
+            if (s === "fully_received")   return "Fully Received";
+            if (s === "balance_pending")  return "Balance Pending";
+            if (s === "noc_pending")      return "NOC Pending";
             if (s === "noc_cash_pending") return "NOC & Balance Pending";
+            if (s === "cashback_pending") return "Cash-Back Due";
             return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
         };
         const getNocStatusLabel = (s: string | null | undefined) => {
@@ -212,12 +213,13 @@ export const exportProfitLoss = async (req: AuthRequest, res: Response): Promise
             if (s === "completed") return "Completed";
             return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
         };
-        const headers = ["Vehicle ID", "Type", "Make", "Model", "Reg No", "Date Purchased", "Date Sold", "Total Invested", "Sold Price", "Profit/Loss", "P/L %", "Days to Sell", "Sale Status", "NOC Status"];
+        const headers = ["Vehicle ID", "Type", "Make", "Model", "Reg No", "Date Purchased", "Date Sold", "Total Invested", "Sold Price", "Received", "Profit/Loss", "P/L %", "Days to Sell", "Sale Status", "NOC Status"];
         const rows = (vehicles as any[]).map(v => [
             v.vehicleId, v.vehicleType === "two_wheeler" ? "Two Wheeler" : "Four Wheeler",
             v.make, v.model, v.registrationNo,
             dFmt(v.datePurchased), dFmt(v.dateSold),
             dINR(v.totalInvestment), dINR(v.soldPrice),
+            dINR(Math.min(v.receivedAmount ?? v.soldPrice ?? 0, v.soldPrice ?? 0)),
             dINR(v.profitLoss), `${(v.profitLossPercentage ?? 0).toFixed(1)}%`,
             v.daysToSell != null ? v.daysToSell : "—",
             getSaleStatusLabel(v.saleStatus), getNocStatusLabel(v.nocStatus),
@@ -230,8 +232,26 @@ export const exportProfitLoss = async (req: AuthRequest, res: Response): Promise
     }
 
     if (format === "pdf") {
+        // Fetch all supplementary data for the comprehensive report
+        const [vehicleStatsRaw, pendingData, purchaseDue1, purchaseDue2] = await Promise.all([
+            vs.getVehicleStats({ vehicleType, dateFrom, dateTo }, req.adminId!),
+            vs.getPendingReport({ vehicleType, dateFrom, dateTo, adminId: req.adminId! }),
+            vs.getPurchaseRegister({ paymentStatus: "partial", vehicleType, dateFrom, dateTo, page: 1, limit: 200, adminId: req.adminId! }),
+            vs.getPurchaseRegister({ paymentStatus: "pending", vehicleType, dateFrom, dateTo, page: 1, limit: 200, adminId: req.adminId! }),
+        ]);
+        const vehicleStats  = vehicleStatsRaw as any;
+        const pendingArr    = pendingData as any[];
+        const purchaseDue   = [...((purchaseDue1 as any).data ?? []), ...((purchaseDue2 as any).data ?? [])];
+        const salePending   = pendingArr.filter((v: any) => ["balance_pending","noc_pending","noc_cash_pending"].includes(v.saleStatus));
+        const cashbackOwed  = pendingArr.filter((v: any) => v.saleStatus === "cashback_pending");
+
         const { exportPLReportPDF } = await import("../services/pl_report_export");
-        const buf = await exportPLReportPDF(vehicles as any[], { vehicleType, dateFrom, dateTo });
+        const buf = await exportPLReportPDF(vehicles as any[], { vehicleType, dateFrom, dateTo }, {
+            purchaseDue,
+            salePending,
+            cashbackOwed,
+            vehicleStats,
+        });
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", `attachment; filename="pl_report_${timestamp}.pdf"`);
         res.send(buf);

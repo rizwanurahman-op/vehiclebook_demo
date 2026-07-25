@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import ExchangeList from "./components/exchange-list";
 
-export const metadata = { title: "Exchanges | VehicleBook", description: "View all cross-vehicle exchange deals and settlement status" };
+export const metadata = { title: "Exchanges | VBOOK", description: "View all cross-vehicle exchange deals and settlement status" };
 
 export default function ExchangesPage() {
     return (

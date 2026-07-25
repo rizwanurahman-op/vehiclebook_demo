@@ -13,6 +13,7 @@ import {
     ChevronLeft,
     ChevronRight,
 } from "lucide-react";
+import VBookLogo from "@/components/common/vbook-logo";
 import { useUiStore } from "@/stores/ui";
 import { LogoutDialog } from "@/components/common";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -35,21 +36,24 @@ export default function SuperAdminSidebar() {
                 collapsed ? "w-16" : "w-64"
             )}
         >
-            {/* Logo */}
-            <Link
-                href="/superadmin/dashboard"
-                className="flex h-16 items-center gap-3 border-b border-border px-4 transition-all overflow-hidden whitespace-nowrap hover:opacity-90 group cursor-pointer"
-            >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-brand shadow-md group-hover:scale-105 transition-transform">
-                    <Shield className="h-5 w-5 text-white" />
-                </div>
-                {!collapsed && (
-                    <div className="min-w-0">
-                        <p className="truncate text-base font-bold text-foreground group-hover:text-primary transition-colors">VehicleBook</p>
-                        <p className="truncate text-[10px] text-muted-foreground">Super Admin</p>
-                    </div>
-                )}
-            </Link>
+            {/* Logo Section */}
+            <div className="flex h-20 items-center px-5 transition-all overflow-hidden select-none">
+                <Link
+                    href="/superadmin/dashboard"
+                    className="flex items-center transition-all hover:opacity-90 group cursor-pointer"
+                >
+                    {collapsed ? (
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl overflow-hidden group-hover:scale-105 transition-transform bg-muted/70 dark:bg-muted/10 border border-border/60 dark:border-slate-800 shadow-xs">
+                            <VBookLogo size="xs" />
+                        </div>
+                    ) : (
+                        <div className="flex flex-col items-start">
+                            <VBookLogo size="lg" className="group-hover:scale-[1.02] transition-transform" />
+                            <p className="truncate text-[9px] text-muted-foreground mt-0.5 pl-1 font-bold tracking-widest uppercase opacity-80">Super Admin</p>
+                        </div>
+                    )}
+                </Link>
+            </div>
 
             {/* Navigation */}
             <nav className="flex-1 overflow-y-auto scrollbar-hide p-3 space-y-1">

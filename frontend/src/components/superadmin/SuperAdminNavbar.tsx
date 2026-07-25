@@ -6,10 +6,10 @@ import { useSessionStore } from "@/stores/session";
 import Link from "next/link";
 import {
     Bell,
-    Shield,
     LogOut,
     Settings,
 } from "lucide-react";
+import VBookLogo from "@/components/common/vbook-logo";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -49,9 +49,9 @@ export default function SuperAdminNavbar() {
                     {/* Logo for mobile */}
                     <Link
                         href="/superadmin/dashboard"
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-brand shadow-md md:hidden hover:opacity-90 transition-opacity cursor-pointer"
+                        className="flex h-8 shrink-0 items-center justify-center md:hidden hover:opacity-90 transition-opacity cursor-pointer"
                     >
-                        <Shield className="h-4 w-4 text-white" />
+                        <VBookLogo size="md" />
                     </Link>
                     <h1 className="text-lg font-bold text-foreground">{title}</h1>
                 </div>

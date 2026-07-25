@@ -339,15 +339,21 @@ export const exportConsignmentDetailPDF = async (id: string): Promise<Buffer | n
                .text(dINR(v.totalInvestment), MG + 8, y + 7, { width: CW - 16, align: "right", lineBreak: false });
             y += 26 + 10;
 
-            // â”€â”€ SALE INFORMATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── SALE INFORMATION ─────────────────────────────────────────────
             if (isSold) {
                 const soldPrice = (v as any).soldPrice ?? 0;
+                const cbDue     = (v as any).buyerCashBackDue ?? 0;
+                const cbBal     = (v as any).buyerCashBackBalance ?? cbDue;
+                const effRcvd   = Math.min(v.receivedAmount ?? soldPrice, soldPrice);
+
                 const saleRows: [string, string, string?, boolean?][] = [
                     ["Date Sold",             dFmt((v as any).dateSold)],
                     ["Sold To",               (v as any).soldTo ?? "-",          undefined, true],
                     ["Buyer Phone",            (v as any).soldToPhone ?? "-"],
                     ["Sold Price",             dINR(soldPrice),                    undefined, true],
-                    ["Received from Buyer",    dINR(v.receivedAmount),             C.green,   true],
+                    ["Revenue Collected",      dINR(effRcvd),                      C.green,   true],
+                    ...(cbDue > 0 ? [["Exchange Trade-In Recorded", dINR(v.receivedAmount), C.amber, false] as [string, string, string?, boolean?]] : []),
+                    ...(cbBal > 0 ? [["Cash-Back Owed to Buyer", `-${dINR(cbBal)}`, C.violet, true] as [string, string, string?, boolean?]] : []),
                     ["Buyer Balance",          v.buyerBalance > 0 ? dINR(v.buyerBalance) : "Fully Received",
                                                v.buyerBalance > 0 ? C.red : C.green, true],
                     ["Paid to Payee",          dINR(v.paidToPayee),                undefined, true],
@@ -368,10 +374,10 @@ export const exportConsignmentDetailPDF = async (id: string): Promise<Buffer | n
                 y += 10;
             }
 
-            // â”€â”€ BUYER PAYMENTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── BUYER PAYMENTS ───────────────────────────────────────────────
             if (buyerPayments.length > 0) {
                 need(22 + buyerPayments.length * 20 + 12);
-                y = sectionBar("BUYER PAYMENTS (Money In)", `Total Received: ${dINR(v.receivedAmount)}`, y);
+                y = sectionBar("BUYER PAYMENTS (Money In)", `Total Recorded: ${dINR(v.receivedAmount)}`, y);
                 buyerPayments.forEach((p: any, i: number) => {
                     need(20);
                     doc.rect(MG, y, CW, 20).fill(i % 2 === 0 ? "#f1f5f9" : C.white);

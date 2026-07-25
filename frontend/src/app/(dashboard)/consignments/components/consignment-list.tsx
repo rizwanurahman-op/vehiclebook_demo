@@ -328,6 +328,9 @@ export const ConsignmentList = ({ initialData }: { initialData: ConsignmentPagin
                                 {(ps?.totalBuyerBalance ?? 0) > 0 && (
                                     <p className="text-[10px] text-amber-400 mt-0.5">₹{(ps?.totalBuyerBalance ?? 0).toLocaleString("en-IN")} pending</p>
                                 )}
+                                {(ps?.totalBuyerCashBackBalance ?? 0) > 0 && (
+                                    <p className="text-[10px] text-violet-400 font-semibold mt-0.5">₹{(ps?.totalBuyerCashBackBalance ?? 0).toLocaleString("en-IN")} cash-back owed</p>
+                                )}
                             </div>
                             <div className="rounded-lg bg-muted/30 border border-border p-3">
                                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
@@ -377,6 +380,9 @@ export const ConsignmentList = ({ initialData }: { initialData: ConsignmentPagin
                                 <p className="text-base font-bold tabular-nums text-foreground">{formatCurrency(fs?.totalReceivedFromBuyers ?? 0)}</p>
                                 {(fs?.totalBuyerBalance ?? 0) > 0 && (
                                     <p className="text-[10px] text-amber-400 mt-0.5">₹{(fs?.totalBuyerBalance ?? 0).toLocaleString("en-IN")} pending</p>
+                                )}
+                                {(fs?.totalBuyerCashBackBalance ?? 0) > 0 && (
+                                    <p className="text-[10px] text-violet-400 font-semibold mt-0.5">₹{(fs?.totalBuyerCashBackBalance ?? 0).toLocaleString("en-IN")} cash-back owed</p>
                                 )}
                             </div>
                             <div className="rounded-lg bg-muted/30 border border-border p-3">

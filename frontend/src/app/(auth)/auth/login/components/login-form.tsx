@@ -8,7 +8,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
-import { Car, Eye, EyeOff, Loader2, Lock, User } from "lucide-react";
+import { Eye, EyeOff, Loader2, Lock, User } from "lucide-react";
 import axios from "@config/axios";
 import { AxiosError } from "axios";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { loginSchema } from "@schemas/login";
 import { useSessionStore } from "@stores/session";
 import { setClientSession } from "@/lib/auth";
+import VBookLogo from "@/components/common/vbook-logo";
 
 type LoginFormData = z.infer<typeof loginSchema>;
 
@@ -74,10 +75,9 @@ const LoginForm = () => {
         <div className="w-full">
             {/* Logo */}
             <div className="mb-8 text-center">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-brand shadow-lg shadow-primary/30">
-                    <Car className="h-8 w-8 text-white" />
+                <div className="mx-auto mb-3 flex items-center justify-center">
+                    <VBookLogo size="xl" />
                 </div>
-                <h1 className="text-2xl font-bold text-foreground">VehicleBook</h1>
                 <p className="mt-1 text-sm text-muted-foreground">Vehicle Shop Management System</p>
             </div>
 
@@ -174,7 +174,7 @@ const LoginForm = () => {
                 </Form>
 
                 <p className="mt-6 text-center text-xs text-muted-foreground">
-                    VehicleBook © {new Date().getFullYear()} — Secure Vehicle Shop Management
+                    VBOOK &copy; {new Date().getFullYear()} — Secure Vehicle Shop Management
                 </p>
             </div>
         </div>

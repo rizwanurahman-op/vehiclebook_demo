@@ -177,7 +177,7 @@ export const exportReports = async (req: Request, res: Response): Promise<void> 
     const vehicles = (allData as any).profitLoss as any[];
 
     if (format === "pdf") {
-        const buf = await exportConsignmentPLReportPDF(vehicles, { saleType, dateFrom, dateTo });
+        const buf = await exportConsignmentPLReportPDF(vehicles, { saleType, dateFrom, dateTo }, allData);
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", `attachment; filename="consignment_pl_report_${timestamp}.pdf"`);
         res.send(buf);
@@ -218,7 +218,8 @@ export const exportConsignments = async (req: Request, res: Response): Promise<v
     const adminId = (req as any).adminId!;
 
     if (format === "pdf") {
-        const buffer = await exportConsignmentsPDF(q, adminId);
+        const stats = await cs.getConsignmentStats(q, adminId);
+        const buffer = await exportConsignmentsPDF(q, adminId, stats);
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", `attachment; filename="consignments_${date}.pdf"`);
         res.send(buffer);

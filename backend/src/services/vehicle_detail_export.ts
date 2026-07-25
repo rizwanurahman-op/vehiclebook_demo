@@ -390,13 +390,19 @@ export const exportVehicleDetailPDF = async (id: string): Promise<Buffer | null>
         // SALE INFORMATION
         if (isSold) {
             const soldPrice = (v as any).soldPrice ?? 0;
+            const cbDue     = (v as any).buyerCashBackDue ?? 0;
+            const cbBal     = (v as any).buyerCashBackBalance ?? cbDue;
+            const effRcvd   = Math.min(v.receivedAmount ?? soldPrice, soldPrice);
+
             const saleRows: [string, string, string?, boolean?][] = [
                 ["Date Sold", dFmt((v as any).dateSold)],
                 ["Sold To", (v as any).soldTo ?? "—", undefined, true],
                 ["Buyer Phone", (v as any).soldToPhone ?? "—"],
                 ["Sold Price", dINR(soldPrice), undefined, true],
-                ["Total Received", dINR(v.receivedAmount), C.green, true],
-                ["Balance / Pending", v.balanceAmount > 0 ? dINR(v.balanceAmount) : "Fully Received",
+                ["Revenue Collected", dINR(effRcvd), C.green, true],
+                ...(cbDue > 0 ? [["Exchange Trade-In Recorded", dINR(v.receivedAmount), "#d97706", false] as [string, string, string?, boolean?]] : []),
+                ...(cbBal > 0 ? [["Cash-Back Owed to Buyer", `-${dINR(cbBal)}`, "#7c3aed", true] as [string, string, string?, boolean?]] : []),
+                ["Balance from Buyer", v.balanceAmount > 0 ? dINR(v.balanceAmount) : "Fully Collected",
                     v.balanceAmount > 0 ? C.red : C.green, true],
                 ["NOC Status", dSl(v.nocStatus)],
                 ["Sale Status", v.saleStatus ? dSl(v.saleStatus) : "—"],
@@ -411,11 +417,11 @@ export const exportVehicleDetailPDF = async (id: string): Promise<Buffer | null>
             });
             y += 10;
 
-                const spList = v.salePayments.filter((p: any) => p.amount > 0);
+            const spList = v.salePayments.filter((p: any) => p.amount > 0);
             if (spList.length > 0) {
                 const totalRec = spList.reduce((s: number, p: any) => s + p.amount, 0);
                 need(22 + spList.length * 26 + 12);
-                y = sectionBar("SALE PAYMENTS", `Total Received: ${dINR(totalRec)}`, y);
+                y = sectionBar("SALE PAYMENTS (Money In)", `Total Recorded: ${dINR(totalRec)}`, y);
                 spList.forEach((p: any, i: number) => {
                     const isExch = p.type === "exchange";
                     const rowH = isExch && ((p as any).exchangeVehicleMake || (p as any).exchangeVehicleRegNo) ? 28 : 20;
@@ -436,6 +442,25 @@ export const exportVehicleDetailPDF = async (id: string): Promise<Buffer | null>
                            .text(`Exchange Vehicle: ${exInfo}`, MG + 26, y + 18, { width: CW - 34, lineBreak: false });
                     }
                     y += rowH;
+                });
+                y += 10;
+            }
+
+            // CASH-BACK PAYMENTS (Money Out to Buyer)
+            const cbList = (v as any).buyerCashBackPayments ?? [];
+            if (cbList.length > 0) {
+                const totalCbPaid = cbList.reduce((s: number, p: any) => s + p.amount, 0);
+                need(22 + cbList.length * 20 + 12);
+                y = sectionBar("CASH-BACK PAYMENTS (Money Out to Buyer)", `Total Returned: ${dINR(totalCbPaid)}`, y);
+                cbList.forEach((p: any, i: number) => {
+                    doc.rect(MG, y, CW, 20).fill(i % 2 === 0 ? "#faf5ff" : C.white);
+                    doc.moveTo(MG, y + 20).lineTo(MG + CW, y + 20).strokeColor(C.border).lineWidth(0.2).stroke();
+                    doc.fontSize(7).font("Helvetica-Bold").fillColor("#7c3aed").text(`#${i + 1}`, MG + 8, y + 6, { lineBreak: false });
+                    doc.font("Helvetica").fillColor(C.text).text(dFmt(p.date), MG + 26, y + 6, { lineBreak: false });
+                    doc.fillColor(C.muted).text(`via ${p.mode}${p.notes ? " — " + p.notes : ""}`, MG + 115, y + 6, { width: 200, lineBreak: false });
+                    doc.font("Helvetica-Bold").fillColor("#7c3aed")
+                       .text(`-${dINR(p.amount)}`, MG + 8, y + 6, { width: CW - 16, align: "right", lineBreak: false });
+                    y += 20;
                 });
                 y += 10;
             }

@@ -5,7 +5,7 @@ import { LoginForm } from "./components";
 
 export const metadata: Metadata = {
     title: `${APP_NAME} | Login`,
-    description: "Sign in to your VehicleBook account",
+    description: "Sign in to your VBOOK account",
 };
 
 export default function LoginPage() {

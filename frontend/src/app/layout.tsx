@@ -7,9 +7,9 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const jetbrains = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
 
 export const metadata: Metadata = {
-    title: "VehicleBook — Vehicle Shop Management",
+    title: "VBOOK — Vehicle Shop Management",
     description: "Digitize your vehicle shop operations — investor management, vehicle tracking, and financial reporting.",
-    keywords: ["vehicle shop", "bike shop", "car shop", "investor management", "financial tracking"],
+    keywords: ["VBOOK", "vehicle shop", "bike shop", "car shop", "investor management", "financial tracking"],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

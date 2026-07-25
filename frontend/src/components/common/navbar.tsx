@@ -5,7 +5,8 @@ import { useSessionStore } from "@stores/session";
 import Link from "next/link";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { LogOut, Settings, Bell, Car } from "lucide-react";
+import { LogOut, Settings, Bell } from "lucide-react";
+import VBookLogo from "./vbook-logo";
 import { ThemeToggle } from ".";
 import { LogoutDialog } from ".";
 import { useState } from "react";
@@ -19,7 +20,7 @@ const getPageTitle = (pathname: string): string => {
     if (pathname.startsWith("/vehicles")) return "Vehicles";
     if (pathname.startsWith("/sales")) return "Sales";
     if (pathname.startsWith("/settings")) return "Settings";
-    return "VehicleBook";
+    return "VBOOK";
 };
 
 const Navbar = () => {
@@ -34,12 +35,12 @@ const Navbar = () => {
         <>
             <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-card px-4 sm:px-6">
                 <div className="flex items-center gap-3">
-                    {/* Replaced MobileNav with Logo for mobile */}
+                    {/* VBOOK Logo for mobile */}
                     <Link
                         href="/dashboard"
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-brand shadow-md md:hidden hover:opacity-90 transition-opacity cursor-pointer"
+                        className="flex shrink-0 items-center justify-center md:hidden hover:opacity-90 transition-opacity cursor-pointer"
                     >
-                        <Car className="h-4 w-4 text-white" />
+                        <VBookLogo size="sm" />
                     </Link>
                     <h1 className="text-lg font-bold text-foreground">{title}</h1>
                 </div>

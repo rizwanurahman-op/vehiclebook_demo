@@ -61,7 +61,7 @@ const buildFilter = (query: PurchaseExportQuery, adminId: string): Record<string
 export const exportPurchasesCSV = async (query: PurchaseExportQuery, adminId: string): Promise<string> => {
     const filter = buildFilter(query, adminId);
     const vehicles = await Vehicle.find(filter)
-        .select("vehicleId vehicleType make model registrationNo purchasedFrom purchasedFromPhone datePurchased purchasePrice purchasePayments purchasePaymentStatus purchasePendingAmount totalInvestment status fundingSource")
+        .select("vehicleId vehicleType make model registrationNo purchasedFrom purchasedFromPhone datePurchased purchasePrice purchasePayments purchasePaymentStatus purchasePendingAmount totalInvestment status fundingSource isFromExchange")
         .sort({ datePurchased: -1 })
         .lean();
 
@@ -75,11 +75,14 @@ export const exportPurchasesCSV = async (query: PurchaseExportQuery, adminId: st
         "Vehicle ID", "Type", "Make", "Model", "Registration No",
         "Purchased From", "Seller Phone", "Date Purchased",
         "Purchase Price", "Amount Paid", "Amount Pending",
-        "Payment Status", "Total Investment", "Vehicle Status", "Funding Source",
+        "Payment Status", "Total Investment", "Vehicle Status", "Funding Source", "Via Exchange",
     ];
 
     const rows = vehicles.map((v) => {
         const paid = v.purchasePrice - (v.purchasePendingAmount ?? 0);
+        const isFromExchange = (v as any).isFromExchange;
+        const paymentStatusLabel = isFromExchange && (v.purchasePaymentStatus === "paid")
+            ? "Via Exchange" : dSl(v.purchasePaymentStatus ?? "");
         return [
             v.vehicleId,
             v.vehicleType === "two_wheeler" ? "Two Wheeler" : "Four Wheeler",
@@ -92,10 +95,11 @@ export const exportPurchasesCSV = async (query: PurchaseExportQuery, adminId: st
             v.purchasePrice,
             paid,
             v.purchasePendingAmount ?? 0,
-            dSl(v.purchasePaymentStatus ?? ""),
+            paymentStatusLabel,
             v.totalInvestment,
             dSl(v.status),
             dSl((v as any).fundingSource ?? ""),
+            isFromExchange ? "Yes" : "No",
         ].map(esc).join(",");
     });
 
@@ -106,7 +110,7 @@ export const exportPurchasesCSV = async (query: PurchaseExportQuery, adminId: st
 export const exportPurchasesPDF = async (query: PurchaseExportQuery, adminId: string): Promise<Buffer> => {
     const filter = buildFilter(query, adminId);
     const vehicles = await Vehicle.find(filter)
-        .select("vehicleId vehicleType make model registrationNo purchasedFrom purchasedFromPhone datePurchased purchasePrice purchasePayments purchasePaymentStatus purchasePendingAmount totalInvestment status fundingSource")
+        .select("vehicleId vehicleType make model registrationNo purchasedFrom purchasedFromPhone datePurchased purchasePrice purchasePayments purchasePaymentStatus purchasePendingAmount totalInvestment status fundingSource isFromExchange")
         .sort({ datePurchased: -1 })
         .lean();
 
@@ -253,10 +257,13 @@ export const exportPurchasesPDF = async (query: PurchaseExportQuery, adminId: st
                     paid: C.green, partial: C.orange, pending: C.red,
                 };
                 const ps = v.purchasePaymentStatus ?? "pending";
+                const isFromExchange = (v as any).isFromExchange;
+                const statusLabel = isFromExchange && ps === "paid" ? "Via Exchange" : dSl(ps);
+                const sColor = isFromExchange && ps === "paid" ? C.orange : (statusColor[ps] ?? C.slate);
 
                 const cells: [string, string, "left" | "right" | "center", string?][] = [
                     [`${idx + 1}`, "6", "center"],
-                    [v.vehicleId ?? "—", "6.5", "left"],
+                    [v.vehicleId ?? "—", "6.5", "left", isFromExchange ? C.orange : undefined],
                     [v.vehicleType === "two_wheeler" ? "Two Wheeler" : "Four Wheeler", "6.5", "left"],
                     [`${v.make} ${v.model}`, "6.5", "left"],
                     [v.registrationNo, "6.5", "left"],
@@ -265,7 +272,7 @@ export const exportPurchasesPDF = async (query: PurchaseExportQuery, adminId: st
                     [dINR(v.purchasePrice), "6.5", "right"],
                     [dINR(paid), "6.5", "right", C.green],
                     [pending > 0 ? dINR(pending) : "—", "6.5", "right", pending > 0 ? C.red : C.muted],
-                    [dSl(ps), "6", "center", statusColor[ps] ?? C.slate],
+                    [statusLabel, "6", "center", sColor],
                 ];
 
                 let rx = MG;

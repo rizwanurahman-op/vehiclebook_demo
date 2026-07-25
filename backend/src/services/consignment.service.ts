@@ -334,6 +334,7 @@ export const getConsignmentStats = async (query: { saleType?: string; vehicleTyp
             totalFinanceBalance: z(f.totalPayeeBalance),
             totalReceivedFromBuyers: z(f.totalReceivedFromBuyers),
             totalBuyerBalance: z(f.totalBuyerBalance),
+            totalBuyerCashBackBalance: z(f.totalBuyerCashBackBalance),
             fullyClosed: z(f.fullyClosed),
         },
     };

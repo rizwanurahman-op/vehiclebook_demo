@@ -273,6 +273,7 @@ export const ConsignmentReports = () => {
                             const np    = items.reduce((s, v) => s + v.netProfit, 0);
                             const po    = items.reduce((s, v) => s + (v.paidToPayee || 0), 0);
                             const bbal  = items.reduce((s, v) => s + (v.buyerBalance || 0), 0);
+                            const cbbal = items.reduce((s, v) => s + (v.buyerCashBackBalance || 0), 0);
                             return (
                                 <div key={label} className="rounded-xl border border-border bg-card p-5">
                                     <div className="flex items-center justify-between mb-4">
@@ -284,19 +285,20 @@ export const ConsignmentReports = () => {
                                     ) : (
                                         <div className="grid grid-cols-2 gap-3">
                                             {[
-                                                { l: "Total Sold",   v: String(items.length) },
-                                                { l: "Recon Cost",   v: formatCurrency(recon) },
-                                                { l: "Revenue",     v: formatCurrency(rev) },
-                                                { l: payeeLabel,    v: formatCurrency(po) },
-                                                { l: "Net Profit",  v: formatCurrency(np) },
-                                                { l: "Buyer Balance", v: bbal > 0 ? formatCurrency(bbal) : "Nil" },
-                                                { l: "Avg Days",    v: items.length ? `${Math.round(items.reduce((s, v) => s + (v.daysInShop || 0), 0) / items.length)}d` : "—" },
+                                                { l: "Total Sold",     v: String(items.length) },
+                                                { l: "Recon Cost",     v: formatCurrency(recon) },
+                                                { l: "Revenue",       v: formatCurrency(rev) },
+                                                { l: payeeLabel,      v: formatCurrency(po) },
+                                                { l: "Net Profit",    v: formatCurrency(np) },
+                                                { l: "Buyer Bal / CB",v: cbbal > 0 ? `-${formatCurrency(cbbal)} (CB)` : bbal > 0 ? formatCurrency(bbal) : "Nil" },
+                                                { l: "Avg Days",      v: items.length ? `${Math.round(items.reduce((s, v) => s + (v.daysInShop || 0), 0) / items.length)}d` : "—" },
                                             ].map(row => (
                                                 <div key={row.l}>
                                                     <p className="text-xs text-muted-foreground">{row.l}</p>
                                                     <p className={cn("font-bold text-sm mt-0.5",
                                                         row.l === "Net Profit" ? color
-                                                        : row.l === "Buyer Balance" && bbal > 0 ? "text-amber-400"
+                                                        : row.l === "Buyer Bal / CB" && cbbal > 0 ? "text-violet-400 font-bold"
+                                                        : row.l === "Buyer Bal / CB" && bbal > 0 ? "text-amber-400 font-bold"
                                                         : "text-foreground")}>{row.v}</p>
                                                 </div>
                                             ))}
@@ -402,7 +404,7 @@ export const ConsignmentReports = () => {
                                     <table className="w-full text-sm">
                                         <thead>
                                             <tr className="border-b border-border bg-muted/30">
-                                                {["Vehicle", "Reg. No.", "Sale Type", "Received", "Sold", "Invested", "Sold Price", "Recon", "Paid Out", "Net Profit", "Days"].map(h => (
+                                                {["Vehicle", "Reg. No.", "Sale Type", "Received", "Sold", "Invested", "Sold Price", "Recon", "Buyer Bal / CB", "Paid Out", "Net Profit", "Days"].map(h => (
                                                     <th key={h} className="px-4 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider whitespace-nowrap">{h}</th>
                                                 ))}
                                             </tr>
@@ -410,6 +412,8 @@ export const ConsignmentReports = () => {
                                         <tbody className="divide-y divide-border">
                                             {plPaged.map(v => {
                                                 const isProfit = v.netProfit >= 0;
+                                                const cb = v.buyerCashBackBalance ?? 0;
+                                                const bb = v.buyerBalance ?? 0;
                                                 return (
                                                     <tr key={v._id} className="hover:bg-muted/10 transition-colors">
                                                         <td className="px-4 py-3">
@@ -427,6 +431,15 @@ export const ConsignmentReports = () => {
                                                         <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">{formatCurrency(v.totalInvestment)}</td>
                                                         <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">{formatCurrency(v.soldPrice || 0)}</td>
                                                         <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">-{formatCurrency(v.totalReconCost)}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap">
+                                                            {cb > 0 ? (
+                                                                <span className="font-semibold text-violet-400">-{formatCurrency(cb)} (CB)</span>
+                                                            ) : bb > 0 ? (
+                                                                <span className="font-semibold text-amber-400">{formatCurrency(bb)}</span>
+                                                            ) : (
+                                                                <span className="text-muted-foreground">Nil</span>
+                                                            )}
+                                                        </td>
                                                         <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">-{formatCurrency(v.paidToPayee)}</td>
                                                         <td className="px-4 py-3 whitespace-nowrap">
                                                             <span className={cn("flex items-center gap-1 font-bold text-sm", isProfit ? "text-emerald-400" : "text-red-400")}>
@@ -445,6 +458,15 @@ export const ConsignmentReports = () => {
                                                 <td className="px-4 py-3 text-sm font-bold text-foreground whitespace-nowrap">{formatCurrency(totalInvested)}</td>
                                                 <td className="px-4 py-3 text-sm font-bold text-foreground whitespace-nowrap">{formatCurrency(totalRevenue)}</td>
                                                 <td className="px-4 py-3"></td>
+                                                <td className="px-4 py-3 font-semibold text-xs whitespace-nowrap">
+                                                    {(() => {
+                                                        const totCb = report.profitLoss.reduce((s, v) => s + (v.buyerCashBackBalance || 0), 0);
+                                                        const totBb = report.profitLoss.reduce((s, v) => s + (v.buyerBalance || 0), 0);
+                                                        if (totCb > 0) return <span className="text-violet-400">-{formatCurrency(totCb)} (CB)</span>;
+                                                        if (totBb > 0) return <span className="text-amber-400">{formatCurrency(totBb)}</span>;
+                                                        return <span className="text-muted-foreground">Nil</span>;
+                                                    })()}
+                                                </td>
                                                 <td className="px-4 py-3 text-sm font-bold text-muted-foreground whitespace-nowrap">-{formatCurrency(totalPaidOut)}</td>
                                                 <td className="px-4 py-3 whitespace-nowrap">
                                                     <span className={cn("text-sm font-bold", totalNetProfit >= 0 ? "text-emerald-400" : "text-red-400")}>

@@ -5,7 +5,7 @@ import { ForgotPasswordForm } from "./components";
 
 export const metadata: Metadata = {
     title: `${APP_NAME} | Forgot Password`,
-    description: "Reset your VehicleBook account password",
+    description: "Reset your VBOOK account password",
 };
 
 export default function ForgotPasswordPage() {

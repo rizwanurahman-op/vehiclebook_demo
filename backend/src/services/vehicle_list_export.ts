@@ -266,6 +266,7 @@ export const exportVehiclesPDF = async (query: VehicleListExportQuery, adminId: 
                 else if (saleStatus === "noc_pending")    flagParts.push({ label: "NOC Pending",     color: "#ca8a04" });
                 else if (saleStatus === "fully_received") flagParts.push({ label: "Fully Received",  color: C.green });
                 else if (saleStatus === "noc_cash_pending") flagParts.push({ label: "NOC + Cash Pending", color: C.red });
+                else if (saleStatus === "cashback_pending") flagParts.push({ label: "Cash-Back Due", color: C.purple });
                 if ((v as any).isFromExchange)            flagParts.push({ label: "From Exchange",   color: C.cyan });
                 if ((v as any).isExchange)                flagParts.push({ label: "Sold via Exch.",  color: C.purple });
 

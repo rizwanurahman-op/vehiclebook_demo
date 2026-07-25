@@ -33,6 +33,9 @@ import salesRoutes from "./routes/sales.routes";
 import userRoutes from "./routes/user.routes";
 import backupRoutes from "./routes/backup.routes";
 import superAdminRoutes from "./routes/superadmin.routes";
+import expenseRoutes from "./routes/expense.routes";
+import staffRoutes from "./routes/staff.routes";
+import staffRoleRoutes from "./routes/staff-role.routes";
 
 const app = express();
 
@@ -113,6 +116,9 @@ app.use("/api/v1/exchanges", exchangeRoutes);
 app.use("/api/v1/sales", salesRoutes);
 app.use("/api/v1/backups", backupRoutes);
 app.use("/api/v1/superadmin", superAdminRoutes);
+app.use("/api/v1/expenses", expenseRoutes);
+app.use("/api/v1/staff", staffRoutes);
+app.use("/api/v1/staff-roles", staffRoleRoutes);
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use("*", (_req, res) => {

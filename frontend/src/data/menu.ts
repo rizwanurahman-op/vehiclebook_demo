@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, ArrowDownLeft, ArrowUpRight, BarChart3, Car, DollarSign, TrendingUp, Store, PieChart, ArrowLeftRight, ShoppingCart, Settings, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Users, ArrowDownLeft, ArrowUpRight, BarChart3, Car, DollarSign, TrendingUp, Store, PieChart, ArrowLeftRight, ShoppingCart, Settings, ShieldCheck, ReceiptText, UserRound, Tags } from "lucide-react";
 
 export interface MenuItem {
     label: string;
@@ -33,6 +33,11 @@ export const SIDEBAR_MENU: MenuItem[] = [
 
     // Exchanges — cross-module (spans Phase 2 & Phase 3)
     { label: "Exchanges", href: "/exchanges", icon: ArrowLeftRight, group: "Exchanges" },
+
+    // Operations
+    { label: "Expenses", href: "/expenses", icon: ReceiptText, group: "Operations" },
+    { label: "Staff", href: "/staff", icon: UserRound, group: "Operations" },
+    { label: "Staff Roles", href: "/staff-roles", icon: Tags, group: "Operations" },
 
     // Account
     { label: "Settings", href: "/settings", icon: Settings, group: "Account" },

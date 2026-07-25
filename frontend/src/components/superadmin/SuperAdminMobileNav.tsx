@@ -4,8 +4,9 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from "@/components/ui/sheet";
-import { Menu, Shield, LayoutDashboard, Users, Settings } from "lucide-react";
+import { Menu, LayoutDashboard, Users, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
+import VBookLogo from "@/components/common/vbook-logo";
 
 const NAV_ITEMS = [
     { href: "/superadmin/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -41,19 +42,16 @@ const SuperAdminMobileNav = ({ customTrigger }: SuperAdminMobileNavProps = {}) =
             <SheetContent side="left" className="w-72 p-0 flex flex-col">
                 <SheetTitle className="sr-only">SuperAdmin Navigation Menu</SheetTitle>
                 <SheetDescription className="sr-only">Mobile navigation menu for SuperAdmin console</SheetDescription>
-                
+
                 {/* Mobile Sidebar Header */}
                 <Link
                     href="/superadmin/dashboard"
                     onClick={() => setOpen(false)}
-                    className="flex h-16 items-center gap-3 border-b border-border px-4 shrink-0 hover:opacity-90 group cursor-pointer"
+                    className="flex h-20 items-center justify-center border-b border-border px-4 shrink-0 hover:opacity-90 group cursor-pointer"
                 >
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-brand shadow-md group-hover:scale-105 transition-transform">
-                        <Shield className="h-5 w-5 text-white" />
-                    </div>
-                    <div className="min-w-0">
-                        <p className="truncate text-base font-bold text-foreground group-hover:text-primary transition-colors">VehicleBook</p>
-                        <p className="truncate text-[10px] text-muted-foreground">Super Admin</p>
+                    <div className="flex flex-col items-center">
+                        <VBookLogo size="lg" className="group-hover:scale-[1.03] transition-transform" />
+                        <p className="text-[10px] text-muted-foreground mt-1 font-semibold tracking-widest uppercase">Super Admin</p>
                     </div>
                 </Link>
 

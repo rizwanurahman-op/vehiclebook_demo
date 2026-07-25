@@ -3,11 +3,12 @@
 import { cn } from "@/lib/utils";
 import { useState, Suspense } from "react";
 import Link from "next/link";
-import { Car, LogOut, ChevronLeft, ChevronRight } from "lucide-react";
+import { LogOut, ChevronLeft, ChevronRight } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { useUiStore } from "@stores/ui";
 import { LogoutDialog } from ".";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import VBookLogo from "./vbook-logo";
 
 const SidebarFallback = () => (
     <div className="flex-1 overflow-y-auto p-3 space-y-2">
@@ -28,21 +29,21 @@ const Sidebar = () => {
                 collapsed ? "w-16" : "w-64"
             )}
         >
-            {/* Logo */}
-            <Link
-                href="/dashboard"
-                className="flex h-16 items-center gap-3 border-b border-border px-4 transition-all overflow-hidden whitespace-nowrap hover:opacity-90 group cursor-pointer"
-            >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-brand shadow-md group-hover:scale-105 transition-transform">
-                    <Car className="h-5 w-5 text-white" />
-                </div>
-                {!collapsed && (
-                    <div className="min-w-0">
-                        <p className="truncate text-base font-bold text-foreground group-hover:text-primary transition-colors">VehicleBook</p>
-                        <p className="truncate text-[10px] text-muted-foreground">Shop Management</p>
-                    </div>
-                )}
-            </Link>
+            {/* Logo Section */}
+            <div className="flex h-20 items-center px-5 transition-all overflow-hidden select-none">
+                <Link
+                    href="/dashboard"
+                    className="flex items-center transition-all hover:opacity-90 group cursor-pointer"
+                >
+                    {collapsed ? (
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl overflow-hidden group-hover:scale-105 transition-transform bg-muted/70 dark:bg-muted/10 border border-border/60 dark:border-slate-800 shadow-xs">
+                            <VBookLogo size="xs" />
+                        </div>
+                    ) : (
+                        <VBookLogo size="lg" className="group-hover:scale-[1.02] transition-transform" />
+                    )}
+                </Link>
+            </div>
 
             {/* Navigation */}
             <Suspense fallback={<SidebarFallback />}>

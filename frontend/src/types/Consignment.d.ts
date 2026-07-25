@@ -198,6 +198,7 @@ interface IConsignmentDashboardStats {
         totalFinanceBalance: number;
         totalReceivedFromBuyers: number;
         totalBuyerBalance: number;
+        totalBuyerCashBackBalance: number;
         fullyClosed: number;
     };
 }

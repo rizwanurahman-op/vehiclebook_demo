@@ -22,6 +22,7 @@ const dSl = (s: string | null | undefined) => {
     if (!s) return "—";
     if (s === "noc_cash_pending") return "NOC & Balance Pending";
     if (s === "noc_pending") return "NOC Pending";
+    if (s === "cashback_pending") return "Cash-Back Due";
     if (s === "not_applicable") return "Not Applicable";
     return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).replace(/Noc/g, "NOC");
 };
@@ -143,7 +144,7 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
     type SaleRow = {
         refId: string; source: string; vehicleType: string; make: string; model: string;
         registrationNo: string; dateSold: Date | null; soldTo: string; soldToPhone: string;
-        soldPrice: number; received: number; balance: number; profit: number;
+        soldPrice: number; received: number; balance: number; cashbackBalance: number; profit: number;
         profitPct: number; status: string; isExchange: boolean; daysToSell: number | null;
     };
     const allRows: SaleRow[] = [];
@@ -151,16 +152,22 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
     const vFilter = buildVehicleFilter(query, adminId);
     if (vFilter) {
         const vehicles = await Vehicle.find(vFilter)
-            .select("vehicleId vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice totalInvestment receivedAmount balanceAmount profitLoss profitLossPercentage saleStatus isExchange daysToSell")
+            .select("vehicleId vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice totalInvestment receivedAmount balanceAmount buyerCashBackDue buyerCashBackBalance profitLoss profitLossPercentage saleStatus isExchange daysToSell")
             .sort({ dateSold: -1 }).lean();
         for (const v of vehicles) {
+            const rawReceivedV = v.receivedAmount || 0;
+            const soldPriceV   = v.soldPrice || 0;
+            // For over-trade (cashback) deals: cap collected at soldPrice
+            const effectiveReceivedV = Math.min(rawReceivedV, soldPriceV);
             allRows.push({
                 refId: v.vehicleId, source: "Purchase",
                 vehicleType: v.vehicleType, make: v.make, model: v.model,
                 registrationNo: v.registrationNo, dateSold: v.dateSold || null,
                 soldTo: v.soldTo || "—", soldToPhone: (v as any).soldToPhone || "",
-                soldPrice: v.soldPrice || 0, received: v.receivedAmount || 0,
-                balance: v.balanceAmount || 0, profit: v.profitLoss || 0,
+                soldPrice: soldPriceV, received: effectiveReceivedV,
+                balance: v.balanceAmount || 0,
+                cashbackBalance: (v as any).buyerCashBackBalance || 0,
+                profit: v.profitLoss || 0,
                 profitPct: (v as any).profitLossPercentage || 0,
                 status: dSl(v.saleStatus), isExchange: v.isExchange || false,
                 daysToSell: (v as any).daysToSell ?? null,
@@ -170,17 +177,28 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
     const cFilter = buildConsignmentFilter(query, adminId);
     if (cFilter) {
         const consignments = await ConsignmentVehicle.find(cFilter)
-            .select("consignmentId saleType vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice receivedAmount buyerBalance netProfit profitLossPercentage settlementStatus isExchange daysInShop")
+            .select("consignmentId saleType vehicleType make model registrationNo dateSold soldTo soldToPhone soldPrice receivedAmount buyerBalance buyerCashBackDue buyerCashBackBalance netProfit profitLossPercentage settlementStatus saleStatus isExchange daysInShop")
             .sort({ dateSold: -1 }).lean();
         for (const c of consignments) {
-            const status = c.settlementStatus === "fully_closed" ? "Fully Received" : c.settlementStatus === "open" ? "Balance Pending" : dSl(c.settlementStatus);
+            // Priority: saleStatus field (set by cashback logic) > settlementStatus mapping
+            const cSaleStatus = (c as any).saleStatus as string | undefined;
+            const status = cSaleStatus === "cashback_pending" ? "Cash-Back Due"
+                : c.settlementStatus === "fully_closed" ? "Fully Received"
+                : c.settlementStatus === "open" ? "Balance Pending"
+                : dSl(c.settlementStatus);
+            const rawReceived = c.receivedAmount || 0;
+            const soldPriceC = c.soldPrice || 0;
+            // For over-trade deals: effective collected = min(received, soldPrice)
+            const effectiveReceived = Math.min(rawReceived, soldPriceC);
             allRows.push({
                 refId: c.consignmentId, source: dSl(c.saleType) || "Consignment",
                 vehicleType: c.vehicleType, make: c.make, model: c.model,
                 registrationNo: c.registrationNo, dateSold: c.dateSold || null,
                 soldTo: c.soldTo || "—", soldToPhone: (c as any).soldToPhone || "",
-                soldPrice: c.soldPrice || 0, received: c.receivedAmount || 0,
-                balance: c.buyerBalance || 0, profit: c.netProfit || 0,
+                soldPrice: soldPriceC, received: effectiveReceived,
+                balance: c.buyerBalance || 0,
+                cashbackBalance: (c as any).buyerCashBackBalance || 0,
+                profit: c.netProfit || 0,
                 profitPct: (c as any).profitLossPercentage || 0,
                 status, isExchange: c.isExchange || false,
                 daysToSell: (c as any).daysInShop ?? null,
@@ -198,6 +216,7 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
     const exchangeCount = allRows.filter(r => r.isExchange).length;
     const purchaseSales = allRows.filter(r => r.source === "Purchase").length;
     const consignmentSales = allRows.filter(r => r.source !== "Purchase").length;
+    const cashbackCount = allRows.filter(r => r.status === "Cash-Back Due").length;
 
     const PDFDocument = (await import("pdfkit")).default;
     return new Promise((resolve, reject) => {
@@ -244,19 +263,20 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
                 MG, 29, { width: CW, align: "right", lineBreak: false },
             );
 
-        // ── SUMMARY BAND (5 financial cards) ───────────────────────────────
+        // ── SUMMARY BAND (6 financial cards) ───────────────────────────────
         const summaryY = 56;
-        const mW = CW / 5;
+        const mW = CW / 6;
         const summaryMetrics = [
             { label: "TOTAL SALES", value: allRows.length.toString(), sub: `${purchaseSales} purchase · ${consignmentSales} consignment`, accent: C.indigo },
             { label: "TOTAL REVENUE", value: dINR(totalRevenue), accent: C.amber },
             { label: "AMOUNT RECEIVED", value: dINR(totalReceived), accent: C.green },
             { label: "OUTSTANDING", value: dINR(totalBalance), sub: `${pendingCount} pending`, accent: C.red },
             { label: "TOTAL PROFIT", value: dINR(totalProfit), accent: totalProfit >= 0 ? C.green : C.red },
+            { label: "CASH-BACK OWED", value: cashbackCount > 0 ? cashbackCount.toString() : "None", sub: cashbackCount > 0 ? "Exchange over-trade" : "No over-trade liability", accent: C.violet },
         ];
         summaryMetrics.forEach((m, i) => {
-            const mx = MG + i * (mW + 1.2);
-            doc.rect(mx, summaryY, mW - 1.2, 36).fill(C.light).strokeColor(m.accent + "40").lineWidth(0.5).stroke();
+            const mx = MG + i * (mW + 1.0);
+            doc.rect(mx, summaryY, mW - 1.0, 36).fill(C.light).strokeColor(m.accent + "40").lineWidth(0.5).stroke();
             doc.rect(mx, summaryY, 3, 36).fill(m.accent);
             doc.fontSize(5.5).font("Helvetica-Bold").fillColor(m.accent)
                 .text(m.label, mx + 7, summaryY + 5, { lineBreak: false });
@@ -298,18 +318,18 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
 
         const cols: [string, number, "left" | "right" | "center"][] = [
             ["#", 18, "center"],
-            ["Ref ID", 46, "left"],
-            ["Source", 52, "left"],
-            ["Make / Model", 96, "left"],
-            ["Reg No", 66, "left"],
-            ["Buyer", 78, "left"],
-            ["Date Sold", 54, "left"],
-            ["Days", 26, "center"],
-            ["Sold Price", 64, "right"],
-            ["Received", 60, "right"],
-            ["Balance", 56, "right"],
-            ["Profit/Loss", 60, "right"],
-            ["Status", 72, "center"],  // wider — fits "Balance Pending"
+            ["Ref ID", 44, "left"],
+            ["Source", 48, "left"],
+            ["Make / Model", 92, "left"],
+            ["Reg No", 64, "left"],
+            ["Buyer", 74, "left"],
+            ["Date Sold", 52, "left"],
+            ["Days", 24, "center"],
+            ["Sold Price", 62, "right"],
+            ["Received", 58, "right"],
+            ["Balance / CB", 68, "right"],
+            ["Profit/Loss", 58, "right"],
+            ["Status", 68, "center"],
         ];
 
         let y = tableY;
@@ -348,9 +368,10 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
                 doc.moveTo(MG, y + ROW_H).lineTo(MG + CW, y + ROW_H)
                     .strokeColor(C.border).lineWidth(0.15).stroke();
 
-                const statusColor = r.status.toLowerCase().includes("fully") ? C.green
+                const statusColor = r.status === "Cash-Back Due" ? C.violet
+                    : r.status.toLowerCase().includes("fully") ? C.green
                     : r.balance > 0 ? C.red
-                        : C.muted;
+                    : C.muted;
                 const profitColor = r.profit >= 0 ? C.green : C.red;
                 const srcColor = r.source === "Purchase" ? C.indigo
                     : r.source.toLowerCase().includes("park") ? C.violet
@@ -366,6 +387,13 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
                     : r.status === "NOC & Balance Pending" ? "NOC+Cash"
                     : r.status;
 
+                const balDisplay = r.cashbackBalance > 0 ? `-${dINR(r.cashbackBalance)}`
+                    : r.balance > 0 ? dINR(r.balance)
+                    : "—";
+                const balColor = r.cashbackBalance > 0 ? C.violet
+                    : r.balance > 0 ? C.red
+                    : C.muted;
+
                 const cells: [string, "left" | "right" | "center", string?][] = [
                     [`${idx + 1}`, "center"],
                     [refLabel, "left", r.isExchange ? C.orange : C.text],
@@ -377,7 +405,7 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
                     [r.daysToSell != null ? `${r.daysToSell}d` : "—", "center", C.muted],
                     [dINR(r.soldPrice), "right"],
                     [dINR(r.received), "right", C.green],
-                    [r.balance > 0 ? dINR(r.balance) : "—", "right", r.balance > 0 ? C.red : C.muted],
+                    [balDisplay, "right", balColor],
                     [`${r.profit >= 0 ? "+" : ""}${dINR(r.profit)}`, "right", profitColor],
                     [shortStatus, "center", statusColor],
                 ];
@@ -400,7 +428,7 @@ export const exportSalesPDF = async (query: SalesExportQuery, adminId: string): 
         doc.rect(MG, y, CW, 22).fill(C.navy);
         doc.fontSize(6.5).font("Helvetica-Bold").fillColor(C.white)
             .text(
-                `${allRows.length} records  ·  Revenue: ${dINR(totalRevenue)}  ·  Received: ${dINR(totalReceived)}  ·  Balance: ${dINR(totalBalance)}  ·  Profit: ${totalProfit >= 0 ? "+" : ""}${dINR(totalProfit)}  ·  Exchange: ${exchangeCount}  ·  Pending: ${pendingCount}`,
+                `${allRows.length} records  ·  Revenue: ${dINR(totalRevenue)}  ·  Received: ${dINR(totalReceived)}  ·  Balance: ${dINR(totalBalance)}  ·  Profit: ${totalProfit >= 0 ? "+" : ""}${dINR(totalProfit)}  ·  Exchange: ${exchangeCount}  ·  Pending: ${pendingCount}  ·  Cash-Back Owed: ${cashbackCount}`,
                 MG + 8, y + 7, { lineBreak: false },
             );
         y += 22;

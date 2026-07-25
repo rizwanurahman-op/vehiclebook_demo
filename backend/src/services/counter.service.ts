@@ -13,6 +13,8 @@ const COUNTER_CONFIGS: CounterConfig[] = [
     { name: "vehicle", prefix: "VH-", padding: 5 },
     { name: "consignment", prefix: "CS-", padding: 5 },
     { name: "vehicleOwner", prefix: "OWN-", padding: 3 },
+    { name: "expense", prefix: "EXP-", padding: 5 },
+    { name: "staff", prefix: "STF-", padding: 4 },
 ];
 
 /**

@@ -5,7 +5,7 @@ import { ResetPasswordForm } from "./components";
 
 export const metadata: Metadata = {
     title: `${APP_NAME} | Reset Password`,
-    description: "Set a new password for your VehicleBook account",
+    description: "Set a new password for your VBOOK account",
 };
 
 export default function ResetPasswordPage() {
