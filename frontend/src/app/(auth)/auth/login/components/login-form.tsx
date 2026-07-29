@@ -30,7 +30,7 @@ const LoginForm = () => {
 
     const form = useForm<LoginFormData>({
         resolver: zodResolver(loginSchema),
-        defaultValues: { usernameOrEmail: "", password: "" },
+        defaultValues: { usernameOrEmail: "Rizwanu", password: "Rizwanu@123" },
     });
 
     const onSubmit = async (values: LoginFormData) => {
